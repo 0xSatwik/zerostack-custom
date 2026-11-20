@@ -25,6 +25,7 @@ pub const MODELS_FILE: &str = "/root/pi-bridge/models.json";
 pub const ROTATION_FILE: &str = "/root/pi-bridge/key-rotation.json";
 pub const ZS_CONFIG: &str = "/root/.config/zerostack/config.toml";
 pub const ADMIN_HTML: &str = include_str!("admin.html");
+pub const SETTINGS_HTML: &str = include_str!("settings.html");
 
 pub fn log(msg: &str) {
     util::log(msg);
@@ -519,6 +520,9 @@ fn handle(app: &Arc<App>, req: &http::Request) -> http::Response {
     }
     if method == "GET" && path == "/admin" {
         return http::Response::html(ADMIN_HTML.as_bytes().to_vec());
+    }
+    if method == "GET" && (path == "/pi/settings" || path == "/settings") {
+        return http::Response::html(SETTINGS_HTML.as_bytes().to_vec());
     }
 
     // ---- opening password / token ----
