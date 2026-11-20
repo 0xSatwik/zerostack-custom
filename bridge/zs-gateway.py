@@ -190,6 +190,47 @@ def models_payload():
             "default": {"provider": cfg.get("provider"), "model": cfg.get("model")}}
 
 
+# ---- admin-parity helpers (admin-parity-2026-11-20) -------------------------
+import tomllib
+
+ZS_CONFIG_PATH = os.environ.get("ZS_CONFIG", "/root/.config/zerostack/config.toml")
+MONID_FILE = os.path.expanduser("~/.config/monid/credentials.yaml")
+
+
+def _zs_config_text():
+    with open(ZS_CONFIG_PATH) as f:
+        return f.read()
+
+
+def _zs_config_write(text):
+    # Validate it still parses as TOML before writing.
+    tomllib.loads(text)
+    with open(ZS_CONFIG_PATH + ".bak", "w") as f:
+        f.write(_zs_config_text())
+    with open(ZS_CONFIG_PATH, "w") as f:
+        f.write(text)
+
+
+def monid_status():
+    try:
+        with open(MONID_FILE) as f:
+            import re as _re
+            m = _re.search(r'key:\s*"([^"]+)"', f.read())
+            return {"set": bool(m and m.group(1) and m.group(1) != "PASTE_MONID_KEY_HERE")}
+    except OSError:
+        return {"set": False}
+
+
+def save_monid(key):
+    if not key or len(key) < 8:
+        return False
+    os.makedirs(os.path.dirname(MONID_FILE), exist_ok=True)
+    with open(MONID_FILE, "w") as f:
+        f.write('key: "%s"\nlabel: main\n' % key)
+    os.chmod(MONID_FILE, 0o600)
+    return True
+
+
 def provider_key_status():
     """Env var names the config references + whether each is set. No values."""
     cfg = zs_config()
@@ -203,6 +244,38 @@ def provider_key_status():
         v = os.environ.get(n)
         out.append({"env_name": n, "set": bool(v and v.strip())})
     return out
+
+
+KEYS_FILE = os.path.join(BASE, "provider-keys.env")  # chmod 600, KEY=VALUE lines
+
+
+def save_secret(env_name, value):
+    """Store a provider API key in provider-keys.env (chmod 600). The value
+    is never logged or returned. Returns False on a bad env var name."""
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*", env_name or ""):
+        return False
+    lines = {}
+    try:
+        with open(KEYS_FILE) as f:
+            for line in f:
+                if "=" in line:
+                    k, v = line.strip().split("=", 1)
+                    lines[k] = v
+    except FileNotFoundError:
+        pass
+    lines[env_name] = value
+    with open(KEYS_FILE, "w") as f:
+        for k, v in lines.items():
+            f.write(f"{k}={v}\n")
+    os.chmod(KEYS_FILE, 0o600)
+    os.environ[env_name] = value
+    return True
+
+
+def instabox_status():
+    """Whether the Instabox API key is set. No value."""
+    v = os.environ.get("INSTABOX_API_KEY")
+    return {"set": bool(v and v.strip())}
 
 
 # ---- stats (same shape and basis as pi-gateway.py) ------------------------
@@ -930,11 +1003,13 @@ h1{font-size:21px;margin:4px 0 2px}h2{font-size:16px;margin:0 0 10px}
 button{background:var(--ac);color:#fff;border:none;border-radius:8px;padding:7px 13px;font-size:13.5px;cursor:pointer}
 button.ghost{background:transparent;color:var(--tx);border:1px solid var(--bd)}
 input{background:var(--card);color:var(--tx);border:1px solid var(--bd);border-radius:8px;padding:8px 10px;font-size:14px}
+.nav{font-size:13.5px;margin:2px 0 14px}.nav a{color:var(--ac);text-decoration:none}
 #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:9px 16px;border-radius:9px;font-size:13.5px;display:none;max-width:90%}
 .note{background:rgba(37,99,235,.08);border-left:3px solid var(--ac);padding:9px 12px;border-radius:6px;font-size:13px;margin-top:10px}
 </style></head><body><div class="wrap">
 <h1>Zerostack Admin</h1>
 <div class="sub">Staging gateway on port 8766. Models and keys are read from the live Zerostack config — this page never writes to it.</div>
+<div class="nav"><a href="/pi">Chat</a> · <a href="/admin">Admin</a> · <a href="/browser">Browser</a></div>
 
 <div class="card" id="loginCard"><h2>Unlock</h2>
 <div class="row"><input type="password" id="tok" class="grow" placeholder="Opening password">
@@ -950,15 +1025,48 @@ input{background:var(--card);color:var(--tx);border:1px solid var(--bd);border-r
 
 <div class="card"><h2>Models <span class="mut">(from config.toml)</span></h2><div id="models"></div></div>
 
+<div class="card"><h2>Add a model</h2>
+<div class="row"><input id="am_provider" class="grow" placeholder="provider (e.g. openrouter)">
+<input id="am_model" class="grow" placeholder="model id (e.g. gpt-4o-mini)"></div>
+<div class="row"><input id="am_name" class="grow" placeholder="short name (optional — defaults to the model id)">
+<input id="am_base" class="grow" placeholder="base URL — only for a NEW provider (https://…/v1)"></div>
+<div class="row"><input id="am_env" class="grow" placeholder="key env name — only for a NEW provider">
+<input id="am_key" type="password" class="grow" placeholder="API key — only for a NEW provider"></div>
+<div class="row"><button onclick="addModel()">Add model</button><span class="mut">Adds a quick model (and the provider, when it is new). Restart the gateway after adding.</span></div></div>
+
+<div class="card"><h2>Fallback order</h2>
+<div class="row"><input id="fb_order" class="grow" placeholder="quick-model names in fallback order, comma-separated">
+<button onclick="setFallback()">Set order</button></div>
+<div class="mut">The order Zerostack tries models when the default is unavailable. List every quick model exactly once. Current order is shown in the Models list, top to bottom.</div></div>
+
 <div class="card"><h2>Provider keys</h2><div id="keys"></div>
+<div class="row"><input id="nk_env" class="grow" placeholder="New env name (e.g. OPENROUTER_API_KEY)">
+<input id="nk_val" type="password" class="grow" placeholder="key value">
+<button onclick="setKey()">Set key</button></div>
 <div class="note">Keys are read from the box environment (provider-keys.env and /root/.profile). Values are never shown or returned by this page.</div></div>
+
+<div class="card"><h2>Instabox API key</h2>
+<div class="row"><div class="grow">Instabox API key (ibk_…) — used by Muse to create, start, stop and SSH into the browser machine. <span id="instaboxBadge" class="badge">…</span></div></div>
+<div class="row"><input id="instabox_key" type="password" class="grow" placeholder="ibk_… key from your Instabox dashboard">
+<button onclick="setInstabox()">Save Instabox key</button></div>
+<div class="mut">Stored in provider-keys.env on the box (chmod 600). Values are never shown. The browser machine (muse-browser) is already connected; use this to add or rotate the key.</div></div>
+
+<div class="card"><h2>Monid search key</h2>
+<div class="row"><div class="grow">Combined search inside the server (TinyFish free + cf-search Worker) <span id="monidBadge" class="badge">…</span></div></div>
+<div class="row"><input id="monid_key" type="password" class="grow" placeholder="mk_… key from your Monid dashboard">
+<button onclick="setMonid()">Save Monid key</button></div></div>
+
+<div class="card"><h2>Opening password</h2>
+<div class="row"><input id="admin_pw" type="password" class="grow" placeholder="a password you will remember">
+<button onclick="setAdminPw()">Set opening password</button></div>
+<div class="mut">Sets the password that unlocks /pi and /admin (stored as a SHA-256 hash in gateway.env). Takes effect after a gateway restart — use the Restart button above. Until then, the gateway token still works.</div></div>
 
 <div class="card"><h2>ACP facts for this build</h2>
 <div class="mut" style="line-height:1.7">
 • Zerostack ACP exposes only <span class="mono">initialize</span>, <span class="mono">session/new</span>, <span class="mono">session/prompt</span>.<br>
 • <span class="mono">session/cancel</span> does not exist → Stop ends the session's Zerostack process.<br>
 • No <span class="mono">session/load</span> → the gateway stores transcripts and replays a text digest after a respawn.<br>
-• MCP is disabled in ACP mode, so the vault tools are not available through this gateway.
+• MCP is disabled in ACP mode, so the vault tools are not available through this gateway. The browser MCP entry in config.toml is TUI-only; in gateway sessions the browser is driven by the <span class="mono">browser.py</span> CLI (bash) — see the browser skill.
 </div></div>
 </div></div>
 <div id="toast"></div>
@@ -971,11 +1079,30 @@ async function api(path,opts={}){opts.headers=Object.assign({'Authorization':'Be
  if(r.status===401)throw new Error('bad token');if(!r.ok)throw new Error(d.error||('HTTP '+r.status));return d}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 async function saveTok(){const v=$('tok').value.trim();if(!v)return;
+ // A 43-char hex value is the gateway token, not a password — use it
+ // directly. Trying it as a password first would burn a lockout try and
+ // can never succeed (no opening password is set until you set one).
+ if(/^[0-9a-f]{43}$/i.test(v)){TOK=v;sessionStorage.setItem('zsgtok',TOK);loadAll();return}
  try{const r=await fetch('/admin-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:v})});
   if(r.ok){const d=await r.json();TOK=d.token;sessionStorage.setItem('zsgtok',TOK);loadAll();return}}catch(e){}
  TOK=v;sessionStorage.setItem('zsgtok',TOK);loadAll()}
+async function setMonid(){const v=$('monid_key').value.trim();if(!v){toast('paste the Monid key first');return}
+ try{await api('/monid',{method:'POST',body:JSON.stringify({key:v})});toast('Monid key saved on the box');$('monid_key').value='';loadAll()}catch(e){toast(e.message)}}
+async function setKey(){const e=$('nk_env').value.trim();const v=$('nk_val').value.trim();if(!e||!v){toast('env name and key value are both needed');return}
+ try{await api('/secret',{method:'POST',body:JSON.stringify({env_name:e,value:v})});toast('Key saved');$('nk_env').value='';$('nk_val').value='';loadAll()}catch(e){toast(e.message)}}
+async function setAdminPw(){const v=$('admin_pw').value;if(v.length<6){toast('password must be at least 6 characters');return}
+ try{await api('/admin-password',{method:'POST',body:JSON.stringify({password:v})});toast('Opening password set — restart the gateway to use it');$('admin_pw').value=''}catch(e){toast(e.message)}}
+async function addModel(){const b={provider:$('am_provider').value.trim(),model:$('am_model').value.trim(),name:$('am_name').value.trim(),base_url:$('am_base').value.trim(),env_name:$('am_env').value.trim(),api_key:$('am_key').value.trim()};
+ if(!b.provider||!b.model){toast('provider and model id are needed');return}
+ try{const d=await api('/models',{method:'POST',body:JSON.stringify(b)});toast('Model added: '+d.name+' — restart the gateway');loadAll()}catch(e){toast(e.message)}}
+async function setFallback(){const order=$('fb_order').value.split(',').map(s=>s.trim()).filter(Boolean);
+ if(!order.length){toast('list the quick-model names in order');return}
+ try{await api('/fallback',{method:'POST',body:JSON.stringify({order})});toast('Fallback order saved — restart the gateway');loadAll()}catch(e){toast(e.message)}}
+async function makeDefault(p,m){try{await api('/settings',{method:'POST',body:JSON.stringify({defaultProvider:p,defaultModel:m})});toast('Default set: '+p+'/'+m+' — restart the gateway');loadAll()}catch(e){toast(e.message)}}
 async function loadAll(){try{
- const [health,models,keys]=await Promise.all([api('/health'),api('/models'),api('/keys')]);
+ const [health,models,keys,instabox,monid,settings]=await Promise.all([api('/health'),api('/models'),api('/keys'),api('/instabox-key'),api('/monid'),api('/settings')]);
+ $('instaboxBadge').textContent=instabox.set?'set':'not set';$('instaboxBadge').className='badge '+(instabox.set?'ok':'no');
+ $('monidBadge').textContent=monid.set?'set':'not set';$('monidBadge').className='badge '+(monid.set?'ok':'no');
  $('loginCard').style.display='none';$('app').style.display='block';
  $('health').textContent=health.ok?'running':'?';$('health').className='badge ok';
  $('deflt').textContent='Default: '+((models.default||{}).provider||'?')+'/'+((models.default||{}).model||'?');
@@ -985,7 +1112,8 @@ async function loadAll(){try{
   const h=document.createElement('div');h.className='mono';h.style.fontWeight='600';h.style.marginTop='8px';h.textContent=p;el.appendChild(h);
   if(pv.baseUrl){const b=document.createElement('div');b.className='mut mono';b.textContent=pv.baseUrl+'  ·  key: '+(pv.apiKey||'(none)');el.appendChild(b)}
   (pv.models||[]).forEach(m=>{const row=document.createElement('div');row.className='row';
-   row.innerHTML='<div class="grow"><span class="mono">'+esc(m.id)+'</span> <span class="mut">ctx '+(m.contextWindow||'?')+' · out '+(m.maxTokens||'?')+'</span></div>';
+   const isDef=settings.defaultProvider===p&&settings.defaultModel===m.id;
+   row.innerHTML='<div class="grow"><span class="mono">'+esc(m.id)+'</span> <span class="mut">ctx '+(m.contextWindow||'?')+' · out '+(m.maxTokens||'?')+'</span>'+(isDef?' <span class="badge ok">default</span>':'')+'</div>'+(isDef?'':'<button class="ghost" onclick="makeDefault(\''+esc(p)+'\',\''+esc(m.id)+'\')">Make default</button>');
    el.appendChild(row)})});
  if(!Object.keys(provs).length)el.innerHTML='<div class="mut">No providers in config.</div>';
  const ke=$('keys');ke.innerHTML='';
@@ -994,6 +1122,8 @@ async function loadAll(){try{
   ke.appendChild(row)});
  if(!(keys.keys||[]).length)ke.innerHTML='<div class="mut">No provider keys referenced.</div>';
 }catch(e){$('loginCard').style.display='block';$('app').style.display='none';if(TOK)toast(e.message)}}
+async function setInstabox(){const v=$('instabox_key').value.trim();if(!v){toast('paste the Instabox key first');return}
+ try{await api('/instabox-key',{method:'POST',body:JSON.stringify({key:v})});toast('Instabox key saved on the box');$('instabox_key').value='';loadAll()}catch(e){toast(e.message)}}
 async function restartGw(){try{await api('/restart',{method:'POST',body:'{}'});toast('Restarting…')}catch(e){}
  for(let i=0;i<20;i++){await new Promise(r=>setTimeout(r,1500));try{const h=await fetch('/health').then(r=>r.json());if(h.ok){toast('Gateway back up');loadAll();return}}catch(e){}}toast('Gateway did not answer yet')}
 if(TOK){$('tok').value=TOK;loadAll()}
@@ -1072,6 +1202,14 @@ class H(BaseHTTPRequestHandler):
             return self._json(200, models_payload())
         if u.path == "/keys":
             return self._json(200, {"keys": provider_key_status()})
+        if u.path == "/instabox-key":
+            return self._json(200, instabox_status())
+        if u.path == "/monid":
+            return self._json(200, monid_status())
+        if u.path == "/settings":
+            cfg = zs_config()
+            return self._json(200, {"defaultProvider": cfg.get("provider"),
+                                    "defaultModel": cfg.get("model")})
         if u.path == "/switch":
             return self._json(200, {"backend": "zerostack",
                                     "url": ZS_PUBLIC_URL or "/pi",
@@ -1120,13 +1258,19 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         if urlparse(self.path).path == "/admin-login":
             now = time.time()
+            # No opening password configured: a password can never succeed,
+            # so do not count the attempt toward the lockout (a valid token
+            # login used to burn all 5 tries here). Tell the client to use
+            # the token directly instead.
+            if not ADMIN_PASS_SHA256:
+                return self._json(400, {"error": "no opening password set — use the gateway token"})
             st = LOGIN_FAILS.get("state", {"count": 0, "until": 0})
             if st["until"] > now:
                 return self._json(429, {"error": "too many attempts — try again in a few minutes"})
             body = self._body()
             pw = (body.get("password") or "").encode()
             digest = hashlib.sha256(pw).hexdigest()
-            if ADMIN_PASS_SHA256 and hmac.compare_digest(digest, ADMIN_PASS_SHA256.strip().lower()):
+            if hmac.compare_digest(digest, ADMIN_PASS_SHA256.strip().lower()):
                 LOGIN_FAILS["state"] = {"count": 0, "until": 0}
                 return self._json(200, {"token": TOKEN})
             st["count"] = st.get("count", 0) + 1
@@ -1139,6 +1283,118 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         body = self._body()
 
+        if u.path == "/instabox-key":
+            key = (body.get("key") or "").strip()
+            if not key or not key.startswith("ibk_"):
+                return self._json(400, {"error": "bad key — an Instabox API key starts with ibk_"})
+            if not save_secret("INSTABOX_API_KEY", key):
+                return self._json(400, {"error": "could not save key"})
+            return self._json(200, {"ok": True})
+
+        if u.path == "/monid":
+            if not save_monid(body.get("key")):
+                return self._json(400, {"error": "bad key"})
+            return self._json(200, {"ok": True})
+        if u.path == "/secret":
+            env_name = (body.get("env_name") or "").strip()
+            value = (body.get("value") or "").strip()
+            if not value or not save_secret(env_name, value):
+                return self._json(400, {"error": "bad env_name or empty value"})
+            return self._json(200, {"ok": True, "env_name": env_name})
+        if u.path == "/admin-password":
+            pw = (body.get("password") or "")
+            if len(pw) < 6:
+                return self._json(400, {"error": "password must be at least 6 characters"})
+            digest = hashlib.sha256(pw.encode()).hexdigest()
+            # Store in gateway.env (chmod 600); takes effect on restart.
+            lines = {}
+            try:
+                with open(_gw_env) as f:
+                    for line in f:
+                        if "=" in line:
+                            k, v = line.strip().split("=", 1)
+                            lines[k] = v
+            except FileNotFoundError:
+                pass
+            lines["PI_ADMIN_PASS_SHA256"] = digest
+            with open(_gw_env, "w") as f:
+                for k, v in lines.items():
+                    f.write("%s=%s\n" % (k, v))
+            os.chmod(_gw_env, 0o600)
+            return self._json(200, {"ok": True, "restart_required": True})
+        if u.path == "/settings":
+            prov = (body.get("defaultProvider") or "").strip()
+            mod = (body.get("defaultModel") or "").strip()
+            if not prov or not mod:
+                return self._json(400, {"error": "defaultProvider/defaultModel required"})
+            import re as _re
+            text = _zs_config_text()
+            # Only the top-level lines (before the first [table] header).
+            head, _, tail = text.partition("\n[")
+            head2 = _re.sub(r'(?m)^provider\s*=.*$', 'provider = "%s"' % prov, head, count=1)
+            head2 = _re.sub(r'(?m)^model\s*=.*$', 'model = "%s"' % mod, head2, count=1)
+            _zs_config_write(head2 + ("\n[" + tail if tail else ""))
+            return self._json(200, {"ok": True, "defaultProvider": prov, "defaultModel": mod})
+        if u.path == "/models":
+            # Add a quick model (and a provider when it is new).
+            import re as _re
+            prov = (body.get("provider") or "").strip()
+            mod = (body.get("model") or "").strip()
+            name = (body.get("name") or "").strip() or mod
+            base = (body.get("base_url") or "").strip()
+            env_name = (body.get("env_name") or "").strip()
+            api_key = (body.get("api_key") or "").strip()
+            if not prov or not mod or not _re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+                return self._json(400, {"error": "provider, model and a valid name are required"})
+            text = _zs_config_text()
+            cfg = tomllib.loads(text)
+            providers = cfg.get("custom_providers", {})
+            if prov not in providers:
+                if not base or not env_name:
+                    return self._json(400, {"error": "new provider needs base_url and env_name"})
+                if api_key and not save_secret(env_name, api_key):
+                    return self._json(400, {"error": "bad env_name"})
+                block = ('\n[custom_providers.%s]\nprovider_type = "openai"\n'
+                         'base_url = "%s"\napi_key_env = "%s"\nmodel = "%s"\n'
+                         % (prov, base, env_name, mod))
+                text += block
+            # Append the quick-model block (idempotent on name).
+            if name in (cfg.get("quick_models") or {}):
+                return self._json(400, {"error": "a quick model named '%s' already exists" % name})
+            text += ('\n[quick_models.%s]\nprovider = "%s"\nmodel = "%s"\n'
+                     % (name, prov, mod))
+            _zs_config_write(text)
+            return self._json(200, {"ok": True, "name": name, "provider": prov, "model": mod})
+        if u.path == "/fallback":
+            order = body.get("order") or []
+            if not isinstance(order, list) or not order:
+                return self._json(400, {"error": "order must be a non-empty list of quick-model names"})
+            import re as _re
+            text = _zs_config_text()
+            cfg = tomllib.loads(text)
+            qms = cfg.get("quick_models") or {}
+            if set(order) != set(qms.keys()):
+                return self._json(400, {"error": "order must list every quick model exactly once"})
+            # Split off the quick_models section, rebuild it in the new order.
+            m = _re.search(r"(?m)^# --- Fast model switching.*?\n(?=\[quick_models\.)", text, _re.S)
+            pre = text[:m.start()] if m else text
+            blocks = {}
+            for nm in qms:
+                mm = _re.search(r"(?m)^\[quick_models\.%s\]\n(?:[^\[]*?)(?=\n\[|\Z)" % _re.escape(nm),
+                                text, _re.S)
+                if mm:
+                    blocks[nm] = mm.group(0).rstrip() + "\n"
+            # Everything after the quick_models section (e.g. [mcp_servers.*]).
+            rest_m = _re.search(r"(?m)^\[mcp_servers\.", text)
+            rest = text[rest_m.start():] if rest_m else ""
+            # Rebuild: pre + header comment + blocks in order + rest.
+            header = "# --- Fast model switching (/models <name> or --quick-model=<name>) ---\n"
+            new_text = pre.rstrip() + "\n\n" + header + "".join(
+                "\n" + blocks[nm] for nm in order)
+            if rest:
+                new_text = new_text.rstrip() + "\n\n" + rest
+            _zs_config_write(new_text)
+            return self._json(200, {"ok": True, "order": order})
         if u.path == "/prompt":
             text = (body.get("message") or "").strip()
             if not text:

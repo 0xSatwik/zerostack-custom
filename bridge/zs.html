@@ -277,6 +277,7 @@ kbd{font-family:inherit;font-size:10px;border:1px solid var(--bd);border-bottom-
       </div>
       <button class="icon" onclick="toggleTheme()" id="themeBtn" title="Toggle theme">◐</button>
       <button class="icon" onclick="location.href='/admin'" title="Admin — keys &amp; models">⚙</button>
+      <button class="icon" onclick="location.href='/browser'" title="Browser — watch and take over">🖥</button>
     </div>
   </header>
 
@@ -419,6 +420,11 @@ function showLogin() {
 async function doLogin() {
   const v = $("pw").value.trim(); if (!v) return;
   $("pw").value = "";
+  // A 43-char hex value is the gateway token, not a password — use it
+  // directly (admin-parity-2026-11-20). Trying it as a password first
+  // would burn a lockout try and can never succeed until an opening
+  // password is set on the Admin page.
+  if (/^[0-9a-f]{43}$/i.test(v)) { TOK = v; sessionStorage.setItem("zstok", TOK); return boot(); }
   try {
     const r = await fetch("/admin-login", {
       method: "POST", headers: { "Content-Type": "application/json" },
