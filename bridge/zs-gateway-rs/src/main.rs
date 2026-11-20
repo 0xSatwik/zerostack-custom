@@ -795,16 +795,60 @@ fn handle(app: &Arc<App>, req: &http::Request) -> http::Response {
                 };
                 let s = match sess {
                     Some(s) => s,
-                    None => acp::new_session(
-                        body.get("cwd").and_then(|v| v.as_str()).unwrap_or(WORK),
-                        body.get("model").and_then(|v| v.as_str()).unwrap_or(""),
-                        body.get("name").and_then(|v| v.as_str()).unwrap_or(""),
-                    ),
+                    None => {
+                        // Auto-name a new session from the first message when the
+                        // caller did not supply a name — so the sidebar never shows
+                        // a bare session id.
+                        let nm = body
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        let nm = if nm.is_empty() {
+                            let t: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                            let mut n: String = t.chars().take(48).collect();
+                            if t.chars().count() > 48 {
+                                n.push('…');
+                            }
+                            n
+                        } else {
+                            nm
+                        };
+                        acp::new_session(
+                            body.get("cwd").and_then(|v| v.as_str()).unwrap_or(WORK),
+                            body.get("model").and_then(|v| v.as_str()).unwrap_or(""),
+                            &nm,
+                        )
+                    }
                 };
                 if let Some(m) = body.get("model").and_then(|v| v.as_str()) {
                     if !m.is_empty() {
                         s.lock().model = m.to_string();
                     }
+                }
+                // If an existing session is still unnamed (name == id), name it
+                // from this message too.
+                let renamed = {
+                    let mut st = s.lock();
+                    if st.name == s.id {
+                        let t: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let mut n: String = t.chars().take(48).collect();
+                        if t.chars().count() > 48 {
+                            n.push('…');
+                        }
+                        if !n.is_empty() {
+                            st.name = n;
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                };
+                if renamed {
+                    acp::save_session(&s);
                 }
                 let was = acp::enqueue(&s, &text);
                 if !was {
