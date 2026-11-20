@@ -1,0 +1,8 @@
+# muse-main
+- id: muse-main, model: Muse (main chat), msgs: n/a, updated: 2026-11-21
+- purpose: The Muse main-chat work — everything done directly by Muse (not in a Zerostack session): Pi removal, Settings pages, Admin fixes, recall system, disk cleanup, Instabox browser test
+- decisions: Pi fully removed from the server (user order 2026-11-21); Zerostack is the only agent; Settings is a dedicated /pi/settings page (not a modal — CSS display overrides hidden); browser MCP is the Instabox Playwright MCP, not a Zerostack built-in; recall digests auto-update via a cron watcher; deleting a session deletes its digest + index entry
+- facts: Rust gateway live on 8766 (pid 43720); tunnel hardeepwalia.pitunnel.dpdns.org; /pi/settings shows 22 skills, browser+vault MCP (TUI-only), vault status; Admin login fixed (wrong password shows real error, no silent fallback); Load models fix (show models pane first); /root/.pi deleted 2026-11-21 (478 MB); disk freed ~2.0 GB (npm cache 1.1G, /tmp 358M, .bak target 41M, /root/.pi 478M)
+- outcomes: Pi gone everywhere on the server (gateway, html, sessions, /root/.pi); Settings page live and verified; Instabox browser test PASSED end-to-end via browser.py (unique markers ZEBRA-7741-QUANTUM, KIWI-BLUE-9917); recall system built (index + digests + 17 lessons) and now auto-updating
+- open: model-eval venv+node_modules (1.6 GB) and cf-vault node_modules (305 MB) still on disk — user to decide; visual polish pass on /admin and /pi still outstanding; vault partner equal-access mechanism undecided
+- full: Muse main chat (this conversation); Zerostack session files in /root/pi-bridge/zs-sessions/
