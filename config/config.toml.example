@@ -1,0 +1,93 @@
+# Zerostack config for the Altare sandbox "pi" — STAGING DRAFT
+# Deploy to: /root/.config/zerostack/config.toml on the box (the live file).
+# This file is the draft only; do not treat it as a second live copy.
+# Keys are NEVER in this file — they come from env vars only.
+#   HMS_API_KEY, XINGCHI_API_KEY, TOKENLAB_API_KEY, MOSS_API_KEY,
+#   HOWTOFIX_API_KEY: already on the box (Pi provider-keys.env + /root/.profile).
+#   VAULT_AGENT_TOKEN: the vault request-only token (Pi's mcp.json holds it);
+#   export it in the same env zerostack runs under. Never paste the value here.
+# Search: our web.py (TinyFish + Bing cf-search Worker + X/FxEmbed), NOT Exa.
+#   enable-exa-mcp = false below removes zerostack's built-in Exa search.
+
+provider = "100milionseek"
+model = "deepseek-v4.1-flash-free"
+max_tokens = 65536
+context_window = 197488
+
+# Zerostack's built-in Exa search is replaced by our web.py search
+# (Monid/TinyFish + Bing cf-search Worker + X/FxEmbed). MUST be top-level:
+# in TOML, anything after a [table] header belongs to that table.
+enable-exa-mcp = false
+
+# --- Custom providers: all 6 models, OpenAI-compatible ---
+[custom_providers.100milionseek]
+provider_type = "openai"
+base_url = "https://100milionseek.top/v1"
+api_key_env = "HMS_API_KEY"
+model = "deepseek-v4.1-flash-free"
+# Pi compat note: this provider expects its output limit as max_tokens.
+# Zerostack sends max_tokens for OpenAI providers by default.
+
+[custom_providers.xingchi]
+provider_type = "openai"
+base_url = "https://api.xingchiapi.com/v1"
+api_key_env = "XINGCHI_API_KEY"
+api_style = "responses"
+# xingchi rejects /v1/chat/completions (400 chat_completions_disabled);
+# api_style "responses" is what fixes it. Models: gpt-6.1-sol, gpt-6-astra.
+
+[custom_providers.tokenlab]
+provider_type = "openai"
+base_url = "https://api.tokenlab.amd.com/v1"
+api_key_env = "TOKENLAB_API_KEY"
+model = "DeepSeek-V4.1-Flash"
+
+[custom_providers.moss]
+provider_type = "openai"
+base_url = "https://api.mosi.cn/v1"
+api_key_env = "MOSS_API_KEY"
+model = "nex-n2.6"
+
+[custom_providers.howtofix]
+provider_type = "openai"
+base_url = "https://api.howtofix.id/v1"
+api_key_env = "HOWTOFIX_API_KEY"
+model = "deepSeek-v4.1-flash-1017-sg"
+
+# --- Fast model switching (/models <name> or --quick-model=<name>) ---
+[quick_models.fast]
+provider = "100milionseek"
+model = "deepseek-v4.1-flash-free"
+
+[quick_models.sol]
+provider = "xingchi"
+model = "gpt-6.1-sol"
+
+[quick_models.astra]
+provider = "xingchi"
+model = "gpt-6-astra"
+
+[quick_models.tokenlab]
+provider = "tokenlab"
+model = "DeepSeek-V4.1-Flash"
+
+[quick_models.moss]
+provider = "moss"
+model = "nex-n2.6"
+
+[quick_models.howtofix]
+provider = "howtofix"
+model = "deepSeek-v4.1-flash-1017-sg"
+
+# --- Vault MCP (same locked model as Pi: Muse unlocks, agent never sees keys) ---
+# NOTE: zerostack does NOT expand ${ENV} in MCP headers (expand_env is
+# provider-only, verified in src/provider.rs). The LIVE config on the box gets
+# the literal token substituted at deploy time from $VAULT_AGENT_TOKEN — the
+# same way Pi's mcp.json holds the token on the box. NEVER put the literal
+# token in this draft or the repo; the draft keeps the placeholder.
+[mcp_servers.vault]
+url = "https://YOUR-VAULT-WORKER.workers.dev/mcp"
+headers = { Authorization = "Bearer ${VAULT_AGENT_TOKEN}" }
+connect_timeout_secs = 30
+tool_timeout_secs = 30
+connect_retries = 2
