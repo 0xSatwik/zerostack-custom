@@ -106,6 +106,10 @@ aside{width:298px;flex:0 0 298px;border-right:1px solid var(--bd);background:var
 .sitem.active:before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:3px;border-radius:9px;background:var(--ac)}
 .sitem .r1{display:flex;align-items:center;gap:6px}
 .sitem .nm{flex:1;min-width:0;font-size:13.5px;font-weight:560;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sitem .sbtn{flex:0 0 auto;width:22px;height:22px;padding:0;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--mut2);font-size:13px;line-height:1;cursor:pointer;display:none;align-items:center;justify-content:center}
+.sitem:hover .sbtn{display:inline-flex}
+.sitem .sbtn:hover{background:var(--card);color:var(--fg);border-color:var(--bd)}
+.sitem .sbtn.del:hover{background:var(--bad);color:#fff;border-color:var(--bad)}
 .sitem .r2{display:flex;gap:7px;align-items:center;margin-top:2px;font-size:11px;color:var(--mut2)}
 .sitem .mdl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
 .sitem .cnt{font-variant-numeric:tabular-nums}
@@ -597,11 +601,14 @@ function renderSessions(force) {
     return;
   }
   set(el, list.map(s => {
-    const nm = (s.name && s.name !== s.id) ? s.name : shortId(s.id);
+    const named = (s.name && s.name !== s.id);
+    const nm = named ? s.name : "New chat";
     const mdl = s.model || modelCache[s.id] || "";
     return '<div class="sitem' + (s.id === CUR ? " active" : "") + '" data-id="' + esc(s.id) + '" data-act="open">' +
       '<div class="r1">' + (s.running ? '<span class="pulse"></span>' : "") +
-      '<span class="nm">' + esc(nm) + "</span></div>" +
+      '<span class="nm">' + esc(nm) + "</span>" +
+      '<button class="sbtn" data-act="sren" data-id="' + esc(s.id) + '" title="Rename chat">✎</button>' +
+      '<button class="sbtn del" data-act="sdel" data-id="' + esc(s.id) + '" title="Delete chat">×</button></div>' +
       '<div class="r2">' + (mdl ? '<span class="mdl" title="' + esc(mdl) + '">' + esc(mdl.split("/").pop()) + "</span>" :
         '<span class="mdl">—</span>') +
       '<span class="cnt">' + (s.messages || 0) + " msg</span>" +
@@ -665,7 +672,7 @@ async function loadTranscript() {
     meta.push(num(st.tokens.input + (st.tokens.output || 0)) + " tok");
   $("sessMeta").textContent = meta.join(" · ");
   const s = SESS.find(x => x.id === CUR);
-  $("sessTitle").textContent = (s && s.name && s.name !== s.id) ? s.name : (s ? shortId(s.id) : CUR);
+  $("sessTitle").textContent = (s && s.name && s.name !== s.id) ? s.name : "New chat";
   renderLog();
   updateRunBtns();
 }
@@ -1106,7 +1113,7 @@ function doRename() { if (!CUR) return toast("Open a chat first"); startRename()
 async function delSession() {
   if (!CUR) return toast("Open a chat first");
   const s = SESS.find(x => x.id === CUR);
-  const nm = (s && s.name && s.name !== s.id) ? s.name : shortId(CUR);
+  const nm = (s && s.name && s.name !== s.id) ? s.name : "New chat";
   if (!confirm('Delete chat "' + nm + '"?\n\nThis removes the session file on the box and cannot be undone.')) return;
   try {
     await api("/sessions/" + encodeURIComponent(CUR), { method: "DELETE" });
@@ -1131,7 +1138,42 @@ $("search").addEventListener("keydown", e => { if (e.key === "Escape") { e.targe
 
 /* event delegation for dynamically built rows/chips (the sanitizer strips
    inline on* handlers, so nothing injected via set() can carry its own) */
-$("sessList").addEventListener("click", e => {
+$("sessList").addEventListener("click", async e => {
+  // Per-session rename / delete buttons live inside the row — handle them
+  // first so they do not also trigger opening the session.
+  const del = e.target.closest("[data-act='sdel']");
+  if (del && del.dataset.id){
+    e.stopPropagation();
+    const id = del.dataset.id;
+    const s = SESS.find(x => x.id === id);
+    const nm = (s && s.name && s.name !== s.id) ? s.name : "New chat";
+    if (!confirm('Delete chat "' + nm + '"?\n\nThis removes the session file on the box and cannot be undone.')) return;
+    try {
+      await api("/sessions/" + encodeURIComponent(id), { method: "DELETE" });
+      toast("Deleted");
+      if (CUR === id){ CUR = null; MSGS = []; }
+      loadSessions(true); renderLog();
+    } catch(err){ toast(err.message); }
+    return;
+  }
+  const ren = e.target.closest("[data-act='sren']");
+  if (ren && ren.dataset.id){
+    e.stopPropagation();
+    const id = ren.dataset.id;
+    const s = SESS.find(x => x.id === id);
+    const cur = (s && s.name && s.name !== s.id) ? s.name : "";
+    const name = prompt("Rename chat:", cur);
+    if (name === null) return;
+    const nm = name.trim();
+    if (!nm) return;
+    try {
+      await api("/sessions/" + encodeURIComponent(id) + "/rename",
+        { method: "POST", body: JSON.stringify({ name: nm }) });
+      if (CUR === id) $("sessTitle").textContent = nm;
+      loadSessions(true);
+    } catch(err){ toast(err.message); }
+    return;
+  }
   const item = e.target.closest("[data-act='open']");
   if (item && item.dataset.id) selectSession(item.dataset.id);
 });
