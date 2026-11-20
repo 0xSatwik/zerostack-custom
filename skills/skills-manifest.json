@@ -1,0 +1,49 @@
+{
+  "installed": [
+    {
+      "name": "web-research",
+      "path": "/root/.local/share/zerostack/prompts/web-research.md",
+      "bytes": 12513
+    },
+    {
+      "name": "hallmark",
+      "path": "/root/.local/share/zerostack/prompts/hallmark.md",
+      "bundle": "/root/.local/share/zerostack/skills/hallmark",
+      "bundle_files": 187,
+      "bytes": 21166
+    },
+    {
+      "name": "pi-delegation",
+      "path": "/root/.local/share/zerostack/prompts/pi-delegation.md",
+      "bytes": 7973
+    },
+    {
+      "name": "resilient-batch-jobs",
+      "path": "/root/.local/share/zerostack/prompts/resilient-batch-jobs.md",
+      "bytes": 10765
+    }
+  ],
+  "prompt_dir": "/root/.local/share/zerostack/prompts",
+  "prompts_visible_to_zerostack": [
+    "ask",
+    "autoconfig",
+    "brainstorm",
+    "code",
+    "debug",
+    "default",
+    "frontend-design",
+    "hallmark",
+    "orchestrator",
+    "pi-delegation",
+    "plan",
+    "refactor",
+    "resilient-batch-jobs",
+    "review",
+    "review-security",
+    "simplify",
+    "web-research",
+    "work",
+    "write-prompt",
+    "write-text"
+  ]
+}
