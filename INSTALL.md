@@ -144,6 +144,36 @@ in with the gateway token and reset it from the same card.
   search system — never paid Monid endpoints).
 - The vault is locked until Muse unlocks it for a service.
 
+## Disk cleanup
+
+The box is small (10 GiB). These useless files accumulate during setup
+and can eat ~5 GB. `cleanup.sh` (top level, in this repo) removes all of
+them safely and is idempotent — run it any time disk feels high:
+
+```
+bash cleanup.sh
+```
+
+What it removes (and keeps):
+
+| Removes | Keeps |
+|---|---|
+| `/root/.pi-lens` (Pi's analysis tools, 529 MB) | — (Pi is removed, nothing uses it) |
+| `/root/.cache/uv` + `/root/.cache/pip` (972 MB) | — (package caches, re-downloaded if needed) |
+| `/tmp` installer leftovers (`*.tar.gz`, `*.deb`, etc.) | — |
+| npm cache | — |
+| `model-eval/venv` + `node_modules` (1.6 GB) | the results (PROGRESS.md, SUMMARY.md, logs) |
+| `cf-vault/node_modules` (305 MB) | the source (src, public, tests, wrangler.toml) |
+| `zs-gateway-rs.bak-pre-fix/target` (41 MB) | the backup crate source |
+
+What it never touches: the Rust toolchain (`/root/.rustup`, needed to
+rebuild the gateway), the live gateway source, configs/keys/token,
+recall, Zerostack binary, Node, Tailscale, sessions, or the vault.
+
+`install.sh` runs the lightweight part of this cleanup at the end of
+every install, so a fresh install leaves no junk. `cleanup.sh` is the
+full version for a box that has been through the setup.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
