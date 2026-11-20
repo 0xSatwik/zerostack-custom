@@ -5,3 +5,4 @@
 {"id":"a07f783b","name":"browser-test","model":"","msgs":39,"updated":"2026-11-20","topics":["browser","instabox","camoufox","playwright"],"sum":"Browser test session; Instabox Camoufox + Playwright MCP verification."}
 {"id":"aab71315","name":"browser-test-tl","model":"tokenlab/DeepSeek-V4.1-Flash","msgs":8,"updated":"2026-11-20","topics":["browser","instabox","test"],"sum":"Browser test session (tokenlab); Instabox browser check."}
 {"id":"f685b22e","name":"general-work","model":"tokenlab/DeepSeek-V4.1-Flash","msgs":46,"updated":"2026-11-21","topics":["general","zerostack","bridge"],"sum":"General-work session; Zerostack bridge and misc work."}
+{"id": "muse-main", "name": "muse-main", "model": "Muse", "msgs": 0, "updated": "2026-11-21", "topics": ["muse", "pi-removal", "settings", "recall", "disk"], "sum": "Muse main-chat work; Pi removal, Settings pages, Admin fixes, recall system, disk cleanup."}
