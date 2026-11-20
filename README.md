@@ -2,6 +2,16 @@
 
 ---
 
+# zerostack — custom build (private fork)
+
+> This is a **customised private fork** of [zerostack](https://github.com/gi-dellav/zerostack) (upstream, GPL-3.0), built for a self-hosted setup: an always-on Altare sandbox running the agent, a web chat page at `/pi`, our own search stack, vault-backed API keys, and four skills. Upstream credit stays with [gi-dellav](https://github.com/gi-dellav); everything below the line is upstream's README, unchanged except where noted in [FEATURES.md](FEATURES.md).
+>
+> **Scope rule (additive-only):** we keep ALL of zerostack's existing features and remove NOTHING except the search. Search is ours only — Monid/TinyFish + Bing + X — and Exa is fully removed (config flag off, Exa instruction removed from the bundled prompt files). See [FEATURES.md](FEATURES.md) for the full "Changes vs upstream" list.
+>
+> **Start here:** [INSTALL.md](INSTALL.md) (install, config, gateway, search, vault) · [FEATURES.md](FEATURES.md) (what changed vs upstream, known limits) · `bridge/` (web gateway + chat page) · `search/` (web.py) · `workers/` (Bing + X search workers) · `skills/` (four skills) · `config/config.toml.example` (config template — env refs only, never real keys).
+
+---
+
 # zerostack
 Minimal coding agent written in Rust, inspired by [pi](https://pi.dev/docs/latest/usage) and [opencode](https://opencode.ai/).
 
