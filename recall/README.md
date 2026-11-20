@@ -88,3 +88,35 @@ Read the index first; read a lesson file only when it applies.
 The full transcript is never deleted — it is the ground truth. But it is
 never the recall unit. Recall reads the index and the digest. That is the
 whole architecture.
+
+## Automatic updates — `auto_digest.py` (2026-11-21)
+
+Digests used to go stale because they were only written when the agent
+remembered to write one. Now they stay current on their own.
+
+- **Runner:** `auto_digest.py`, in tmux session `recall-auto` on the box.
+  It runs once at start, then every 6 hours (`sleep 21600` loop). No cron
+  and no systemd exist in this container (PID 1 is `tini`), so the tmux
+  loop is the scheduler. If the box restarts, restart the tmux session
+  along with the gateway / relay / tailscaled ones.
+- **What it does per run:** reads the session files in
+  `/root/pi-bridge/zs-sessions/`, compares each message count to
+  `digests/.cursor.json` (the count the digest already covers).
+  - New messages: summarizes ONLY the new messages (the delta) with a
+    cheap model (100milionseek, fallback tokenlab, then moss) and merges
+    them into the digest. The model never sees the full transcript — a
+    digest update costs a few hundred tokens.
+  - New session file: adds it to the index and creates an initial digest.
+  - Session file GONE (the user deleted the chat in /pi): deletes that
+    session's digest AND its index line. Deleting a session deletes its
+    memory. That is the rule, and it is tested (a fake session was added,
+    then its file deleted, and the digest + index entry were removed).
+  - Model call fails: the session is marked stale in the log and retried
+    next run. Nothing is deleted or overwritten on a failure.
+- **muse-main is NOT auto-updated by this script.** That digest covers the
+  Muse main-chat work, which lives in the Muse conversation, not in a
+  Zerostack session file. Muse updates it itself (AGENTS.md standing rule:
+  after finishing important work, update `digests/muse-main.md`).
+- **Log:** `auto_digest.log` (one line per action). Manual run:
+  `python3 /root/work/recall/auto_digest.py`.
+
