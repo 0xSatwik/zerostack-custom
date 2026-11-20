@@ -126,8 +126,42 @@ in with the gateway token and reset it from the same card.
    with `setsid nohup ... & disown` — plain nohup dies when SSH closes.
    Kill Playwright MCP by port PID, never `pkill -f` inside an SSH
    command (it kills your own session).
-4. Password-protect the browser control page with the gateway token.
-5. If the browser is on a different box than the agent, connect both
+4. **Auth (both passwords work).** The browser control page
+   (`/browser`, port 6081) is password-protected. Copy the gateway
+   token to `/data/workspace/browser-auth.txt` (chmod 600) AND the
+   opening password's SHA-256 to `/data/workspace/browser-pass-hash.txt`
+   (chmod 600, from `gateway.env` `PI_ADMIN_PASS_SHA256` on the agent
+   box). The login accepts EITHER the gateway token OR the opening
+   password. (A past bug: the form promised both but the code only
+   checked the token, so the opening password returned
+   "unauthenticated". Fixed — `_check_password` now checks the token,
+   then the SHA-256 of the entered password against the stored hash.)
+   The noVNC path (`/browser-vnc/vnc.html`, port 6080) is NOT itself
+   password-gated — only the control page is.
+5. **Wiring it to Zerostack.** In the Zerostack config,
+   `[mcp_servers.browser]` points at `http://127.0.0.1:8931/mcp`.
+   That port is the tailnet relay on the agent box (see AGENTS.md),
+   forwarding to the Instabox Playwright MCP. The gateway drives the
+   browser via `/root/pi-bridge/browser.py` (commands: navigate,
+   snapshot, click, type, screenshot, eval, wait, back, close, status).
+   The MCP session id lives in `/tmp/browser-mcp-session.json`; it
+   auto re-inits on expiry but the page then goes blank — re-navigate
+   + re-snapshot. `browser_click` / `browser_type` need a `target`
+   (snapshot ref); `browser_take_screenshot` needs `type` + `scale`.
+   The browser skill is installed as a Zerostack prompt
+   (`/prompt browser`).
+6. **Tunnel.** Add `/browser*` → `127.0.0.1:6081` and
+   `/browser-vnc*` → `127.0.0.1:6080` to the tunnel ingress.
+   cloudflared forwards the FULL path — the control page must serve
+   the prefixed path (`/browser`), and noVNC needs the
+   `/usr/share/novnc/browser-vnc` → `/usr/share/novnc` symlink.
+7. **Verify.** From the agent box: `browser.py status` should print
+   `mcp ok: Playwright 1.62.0-alpha-...`. Then navigate to a page
+   with a unique marker (not a famous site — a model can guess a
+   famous title) and confirm the marker appears in the snapshot.
+   The public `/browser` URL should show the login page; log in with
+   either password and the control page should load.
+8. If the browser is on a different box than the agent, connect both
    to the same Tailscale tailnet and use the SOCKS5 relay pattern from
    `AGENTS.md` (Altare has no `/dev/net/tun`, so normal processes
    cannot dial Tailscale IPs — go through the relay on localhost).
