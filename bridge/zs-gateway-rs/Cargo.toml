@@ -1,0 +1,16 @@
+[package]
+name = "zs-gateway"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+serde_json = { version = "1", default-features = false, features = ["std"] }
+toml = "0.8"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
