@@ -78,17 +78,20 @@ if ! command -v cloudflared >/dev/null 2>&1; then
 fi
 cloudflared --version
 
-# --- 5. Zerostack binary ---
+# --- 5. Zerostack binary (build from source — no release binary is published) ---
+# The live binary was built this way. Building takes a few minutes but is
+# the reliable path. The customizations (Exa removed) come from the prompts
+# + config installed below, not from a patched binary — stock Zerostack +
+# custom prompts/config is equivalent.
 if ! command -v zerostack >/dev/null 2>&1; then
-  say "Zerostack $ZS_VERSION"
+  say "Zerostack $ZS_VERSION (build from source)"
   mkdir -p /root/.local/bin
-  # Official release asset (adjust the URL if the release layout changes).
-  curl -fsSL "https://github.com/gi-dellav/zerostack/releases/download/v${ZS_VERSION}/zerostack-linux-x86_64.tar.gz" -o /tmp/zs.tar.gz \
-    || curl -fsSL "https://github.com/gi-dellav/zerostack/releases/download/v${ZS_VERSION}/zerostack" -o /root/.local/bin/zerostack
-  if [ -f /tmp/zs.tar.gz ]; then
-    tar -xzf /tmp/zs.tar.gz -C /root/.local/bin
-    rm -f /tmp/zs.tar.gz
+  if [ ! -d "$WORK/zerostack-src" ]; then
+    git clone -q --depth 1 --branch "v$ZS_VERSION" https://github.com/gi-dellav/zerostack.git "$WORK/zerostack-src" 2>/dev/null \
+      || git clone -q --depth 1 https://github.com/gi-dellav/zerostack.git "$WORK/zerostack-src"
   fi
+  (cd "$WORK/zerostack-src" && cargo build --release -q)
+  cp "$WORK/zerostack-src/target/release/zerostack" /root/.local/bin/zerostack
   chmod +x /root/.local/bin/zerostack
 fi
 export PATH="/root/.local/bin:$PATH"
