@@ -229,7 +229,8 @@ table.grid tr.def td{background:#0c0f14}
           <p class="lead">Every model in one list. The first one is the default; the rest is the fallback order.</p>
 
           <div class="sec">
-            <h2>Default &amp; fallback</h2>
+            <h2>Models — fallback order</h2>
+            <p class="hint" style="margin-top:0">The list IS the order. <b style="color:var(--fg)">#1 is the default</b> — every chat uses it first. If it fails and fallback is on, the gateway tries #2, then #3, and so on. Use ↑ Up / ↓ Down to reorder.</p>
             <div class="field tight" style="align-items:center;gap:18px">
               <label class="switch" title="When off, only the default model is used">
                 <input type="checkbox" id="fbToggle" onchange="toggleFallback()"><span class="t"></span>
@@ -238,8 +239,20 @@ table.grid tr.def td{background:#0c0f14}
               <span class="hint" style="margin:0">off = only the default · on = try the next model in order</span>
             </div>
             <div id="models" style="margin-top:12px"></div>
-            <p class="hint">Up/Down move a model in the fallback order. The top model is the default. Every model is tried
-              only when the fallback toggle is on and the one before it fails.</p>
+          </div>
+
+          <div class="sec">
+            <h2>Providers</h2>
+            <p class="hint" style="margin-top:0">Load models fetches what this provider really serves (using its saved key) — tick what you want and add them. Add key appends another key for this provider; the gateway rotates through them.</p>
+            <div id="provListMain"></div>
+            <div id="provTickWrap" hidden style="margin-top:12px">
+              <label style="font-size:11px;color:var(--mut);font-family:var(--mono)" id="provTickLabel">Pick the models to add</label>
+              <div class="ticks" id="provTicks"></div>
+              <div class="field tight" style="margin-top:8px">
+                <button class="primary" onclick="addProvTicked()">Add selected</button>
+                <button onclick="hideProvTicks()">Cancel</button>
+              </div>
+            </div>
           </div>
 
           <div class="sec">
@@ -607,8 +620,8 @@ function renderModels(ms){
       '<td class="mono mut">' + esc(m.provider) + "</td>" +
       '<td class="mono mut2">' + (m.context ? Number(m.context).toLocaleString() : "—") + "</td>" +
       '<td><div class="rowbtns">' +
-      '<button data-act="up" data-id="' + esc(k) + '" title="Move up">↑</button>' +
-      '<button data-act="down" data-id="' + esc(k) + '" title="Move down">↓</button>' +
+      '<button data-act="up" data-id="' + esc(k) + '" title="Move up in the fallback order">↑ Up</button>' +
+      '<button data-act="down" data-id="' + esc(k) + '" title="Move down in the fallback order">↓ Down</button>' +
       '<button data-act="edit" data-id="' + esc(k) + '" title="Edit">edit</button>' +
       '<button class="danger" data-act="rm" data-id="' + esc(k) + '" title="Remove">rm</button>' +
       "</div></td></tr>";
@@ -782,18 +795,28 @@ async function setFallback(){ toast("Use the fallback toggle in Models"); }
 /* ---------- providers ---------- */
 function renderProviders(ms){
   const provs = ms.providers || [];
-  if (!provs.length){ set($("provList"), '<div class="empty">No providers yet.</div>'); return; }
+  if (!provs.length){
+    set($("provList"), '<div class="empty">No providers yet.</div>');
+    const pm = $("provListMain"); if (pm) set(pm, '<div class="empty">No providers yet — add one below.</div>');
+    return;
+  }
   let html = "";
   provs.forEach(p => {
     const keysset = (p.keys || []).filter(k => k.set).length;
-    html += '<div class="prov"><span class="nm">' + esc(p.name) + "</span>" +
+    html += '<div class="prov" data-prov="' + esc(p.name) + '"><span class="nm">' + esc(p.name) + "</span>" +
       '<span class="pill ' + (keysset ? "ok" : "no") + '">' + keysset + " key" + (keysset === 1 ? "" : "s") + "</span>" +
       '<span class="u">' + esc(p.base_url || "no base url") + "</span>" +
       '<span class="mono mut2">' + (p.models || []).length + " models</span>" +
-      '<div class="rowbtns"><button data-act="pedit" data-id="' + esc(p.name) + '">edit</button>' +
-      '<button class="danger" data-act="prm" data-id="' + esc(p.name) + '">rm</button></div></div>';
+      '<div class="rowbtns"><button data-act="pload" data-id="' + esc(p.name) + '" title="Load this provider\u2019s models">Load models</button>' +
+      '<button data-act="pkey" data-id="' + esc(p.name) + '" title="Add another key for this provider">Add key</button>' +
+      '<button data-act="pedit" data-id="' + esc(p.name) + '">edit</button>' +
+      '<button class="danger" data-act="prm" data-id="' + esc(p.name) + '">rm</button></div>' +
+      '<div class="provKey" hidden><input type="password" class="mono" placeholder="new key (write-only)">' +
+      '<button class="primary" data-act="pkeysave" data-id="' + esc(p.name) + '">Save key</button>' +
+      '<button data-act="pkeycancel" data-id="' + esc(p.name) + '">Cancel</button></div></div>';
   });
   set($("provList"), html);
+  const pm = $("provListMain"); if (pm) set(pm, html);
 }
 document.addEventListener("click", async e => {
   const b = e.target.closest("[data-act]");
@@ -826,8 +849,72 @@ document.addEventListener("click", async e => {
         body: JSON.stringify({ action: "remove", provider: prov, env_name: env }) });
       loadAll(); toast("Key slot removed");
     } catch(err){ toast(err.message); }
+  } else if (act === "pload"){
+    loadProvModels(name);
+  } else if (act === "pkey"){
+    const row = b.closest(".prov");
+    if (!row) return;
+    const box = row.querySelector(".provKey");
+    if (box){ box.hidden = !box.hidden; if (!box.hidden) box.querySelector("input").focus(); }
+  } else if (act === "pkeycancel"){
+    const row = b.closest(".prov");
+    if (!row) return;
+    const box = row.querySelector(".provKey");
+    if (box){ box.hidden = true; box.querySelector("input").value = ""; }
+  } else if (act === "pkeysave"){
+    const row = b.closest(".prov");
+    if (!row) return;
+    const inp = row.querySelector(".provKey input");
+    const key = inp ? inp.value.trim() : "";
+    if (!key){ toast("paste the key first"); return; }
+    try {
+      await api("/provider-keys", { method: "POST",
+        body: JSON.stringify({ action: "add", provider: name, api_key: key }) });
+      loadAll(); toast("Key added — it rotates round-robin from now on");
+    } catch(err){ toast(err.message); }
   }
 });
+
+/* Per-provider model loading: uses the provider's saved key server-side. */
+let PROV_TICKED = [];
+let PROV_TICK_PROVIDER = "";
+async function loadProvModels(name){
+  const wrap = $("provTickWrap");
+  const label = $("provTickLabel");
+  if (label) label.textContent = "Loading " + name + "…";
+  if (wrap) wrap.hidden = false;
+  try {
+    const d = await api("/provider-models", { method: "POST",
+      body: JSON.stringify({ provider: name }) });
+    PROV_TICKED = d.models || [];
+    PROV_TICK_PROVIDER = name;
+    if (!PROV_TICKED.length){ if (label) label.textContent = name + " returned no models"; set($("provTicks"), ""); return; }
+    if (label) label.textContent = "Pick the models to add from " + name + " (" + PROV_TICKED.length + ")";
+    let html = "";
+    PROV_TICKED.forEach((m, i) => {
+      html += '<label class="tick"><input type="checkbox" data-i="' + i + '"' +
+        (i < 40 ? " checked" : "") + "><span>" + esc(m.id) + "</span>" +
+        '<span class="c">' + (m.context ? Number(m.context).toLocaleString() : "") + "</span></label>";
+    });
+    set($("provTicks"), html);
+    if (wrap) wrap.scrollIntoView({ block: "nearest" });
+  } catch(e){
+    if (label) label.textContent = "Load failed — add models by hand below";
+    toast("Load models: " + e.message, 6000);
+  }
+}
+function hideProvTicks(){ const w = $("provTickWrap"); if (w) w.hidden = true; PROV_TICKED = []; }
+async function addProvTicked(){
+  if (!PROV_TICK_PROVIDER){ toast("load a provider's models first"); return; }
+  const picks = [...document.querySelectorAll("#provTicks input[type=checkbox]")]
+    .filter(c => c.checked).map(c => PROV_TICKED[+c.dataset.i]);
+  if (!picks.length){ toast("tick at least one model"); return; }
+  try {
+    MS = await api("/models", { method: "POST",
+      body: JSON.stringify({ action: "add", provider: PROV_TICK_PROVIDER, models: picks }) });
+    hideProvTicks(); loadAll(); toast(picks.length + " model(s) added from " + PROV_TICK_PROVIDER);
+  } catch(e){ toast(e.message); }
+}
 function hideProvEdit(){ $("provEdit").hidden = true; $("provEditEmpty").hidden = false; }
 async function saveProvider(){
   try {
