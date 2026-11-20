@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Zerostack Admin</title>
+<style>
+:root{
+  --bg:#000; --pane:#080808; --panel:#0b0b0b; --line:#1c1c1c; --line2:#262626;
+  --tx:#e8e8e8; --mut:#8a8a8a; --mut2:#5f5f5f;
+  --ac:#4c8dff; --ok:#3fb950; --bad:#f85149; --warn:#d29922;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--tx);font:13px/1.5 var(--sans);overflow:hidden;
+  -webkit-font-smoothing:antialiased}
+button{font:inherit;cursor:pointer;background:transparent;color:var(--tx);
+  border:1px solid var(--line2);border-radius:4px;padding:4px 10px;transition:background .1s,border-color .1s}
+button:hover{background:#151515;border-color:#3a3a3a}
+button:active{transform:translateY(1px)}
+button:disabled{opacity:.4;cursor:not-allowed;transform:none}
+button.primary{background:var(--ac);border-color:var(--ac);color:#000;font-weight:600}
+button.primary:hover{background:#6ba0ff;border-color:#6ba0ff}
+button.danger{color:var(--bad);border-color:#3a1f1f}
+button.danger:hover{background:#1a0f0f;border-color:#5a2a2a}
+input,select,textarea{font:inherit;background:#0d0d0d;color:var(--tx);border:1px solid var(--line2);
+  border-radius:4px;padding:5px 8px;outline:none;min-width:0;width:100%}
+input:focus,select:focus,textarea:focus{border-color:var(--ac)}
+input::placeholder{color:var(--mut2)}
+a{color:var(--ac);text-decoration:none}a:hover{text-decoration:underline}
+.mono{font-family:var(--mono);font-size:12px}
+.mut{color:var(--mut)}.mut2{color:var(--mut2)}
+::-webkit-scrollbar{width:11px;height:11px}
+::-webkit-scrollbar-thumb{background:#242424;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#333;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ---- shell ---- */
+#shell{display:none;height:100%;flex-direction:column}
+#shell.on{display:flex}
+.menubar{height:34px;flex:0 0 34px;display:flex;align-items:center;gap:2px;padding:0 8px;
+  background:var(--pane);border-bottom:1px solid var(--line);z-index:5}
+.menubar .brand{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--tx);
+  padding:0 12px 0 4px;text-transform:uppercase}
+.menubar .brand b{color:var(--ac);font-weight:600}
+.menu{font-size:12px;padding:3px 9px;border-radius:3px;color:var(--mut);cursor:pointer;
+  border:none;background:none}
+.menu:hover{background:#151515;color:var(--tx)}
+.menubar .grow{flex:1}
+.menubar .stat{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--mut)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--mut2)}
+.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}
+
+.body{display:flex;flex:1;min-height:0}
+.actbar{width:52px;flex:0 0 52px;background:var(--pane);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;align-items:stretch;padding-top:4px}
+.act{display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 0 7px;
+  color:var(--mut2);cursor:pointer;border:none;border-left:2px solid transparent;background:none;
+  font-family:var(--mono);font-size:9px;letter-spacing:.08em}
+.act:hover{color:var(--tx)}
+.act.on{color:var(--tx);border-left-color:var(--ac)}
+.act .g{font-size:15px;line-height:1}
+.actbar .sp{flex:1}
+
+.sidebar{width:238px;flex:0 0 238px;background:var(--pane);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;min-height:0}
+.sidebar .hd{font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--mut2);padding:11px 12px 7px}
+.tree{flex:1;overflow-y:auto;padding-bottom:12px}
+.tree .node{display:flex;align-items:center;gap:7px;padding:4px 10px 4px 14px;font-size:12.5px;
+  color:var(--mut);cursor:pointer;border-left:2px solid transparent}
+.tree .node:hover{background:#101010;color:var(--tx)}
+.tree .node.on{background:#111;color:var(--tx);border-left-color:var(--ac)}
+.tree .node .k{font-family:var(--mono);font-size:10px;color:var(--mut2);width:10px}
+.tree .sub{padding:3px 10px 3px 34px;font-size:12px;color:var(--mut2);cursor:pointer;
+  font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree .sub:hover{color:var(--tx)}
+.sidefoot{border-top:1px solid var(--line);padding:8px 10px;display:flex;gap:6px}
+.sidefoot button{flex:1;font-size:11.5px;padding:4px 6px}
+
+.editor{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
+.tabs{height:35px;flex:0 0 35px;display:flex;align-items:stretch;background:var(--pane);
+  border-bottom:1px solid var(--line);overflow-x:auto}
+.tab{display:flex;align-items:center;gap:8px;padding:0 14px;font-size:12.5px;color:var(--mut);
+  border-right:1px solid var(--line);cursor:pointer;font-family:var(--mono);white-space:nowrap;
+  border-top:1px solid transparent;background:none;border-left:none;border-bottom:none;border-radius:0}
+.tab:hover{color:var(--tx);background:#0e0e0e}
+.tab.on{color:var(--tx);background:var(--bg);border-top-color:var(--ac)}
+.tabs .sp{flex:1;border-right:none}
+.pane{flex:1;overflow-y:auto;padding:0}
+.pane[hidden]{display:none}
+.doc{max-width:840px;padding:26px 30px 80px}
+.doc h1{font-size:16px;font-weight:600;margin:0 0 4px;letter-spacing:-.1px}
+.doc h2{font-size:12px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.11em;
+  color:var(--mut2);font-weight:500;margin:0 0 12px}
+.doc p.lead{color:var(--mut);margin:0 0 22px;font-size:12.5px}
+.sec{border-top:1px solid var(--line);padding:20px 0 6px}
+.sec:first-of-type{border-top:none;padding-top:0}
+.field{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.field>*{flex:1;min-width:150px}
+.field.tight>*{flex:0 0 auto}
+.field label{display:block;font-size:11px;color:var(--mut);margin-bottom:4px;font-family:var(--mono);
+  letter-spacing:.04em}
+.hint{font-size:11.5px;color:var(--mut2);margin:6px 0 0;line-height:1.55}
+.hint code{font-family:var(--mono);font-size:11px;color:var(--mut)}
+
+table.grid{width:100%;border-collapse:collapse;font-size:12.5px}
+table.grid th{text-align:left;font-family:var(--mono);font-size:10px;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--mut2);font-weight:500;padding:6px 8px;border-bottom:1px solid var(--line)}
+table.grid td{padding:7px 8px;border-bottom:1px solid #141414;vertical-align:middle}
+table.grid tr:last-child td{border-bottom:none}
+table.grid tr.def td{background:#0c0f14}
+.mk{font-family:var(--mono);font-size:10px;color:var(--ac);border:1px solid #1d3155;
+  border-radius:3px;padding:1px 5px;margin-left:6px}
+.pill{font-family:var(--mono);font-size:10px;padding:1px 6px;border-radius:3px;border:1px solid var(--line2);
+  color:var(--mut)}
+.pill.ok{color:var(--ok);border-color:#1f3a22}
+.pill.no{color:var(--bad);border-color:#3a1f1f}
+.rowbtns{display:flex;gap:5px;justify-content:flex-end}
+.rowbtns button{padding:2px 7px;font-size:11px;font-family:var(--mono)}
+.prov{display:flex;align-items:center;gap:10px;padding:6px 0 6px 2px}
+.prov .nm{font-family:var(--mono);font-size:12px}
+.prov .u{color:var(--mut2);font-size:11px;font-family:var(--mono);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.ticks{max-height:250px;overflow-y:auto;border:1px solid var(--line2);border-radius:4px;
+  background:#0a0a0a;padding:6px}
+.tick{display:flex;align-items:center;gap:8px;padding:3px 6px;border-radius:3px;font-family:var(--mono);
+  font-size:12px;cursor:pointer}
+.tick:hover{background:#131313}
+.tick input{width:auto;margin:0;accent-color:var(--ac)}
+.tick .c{color:var(--mut2);font-size:11px;margin-left:auto}
+.empty{color:var(--mut2);font-size:12.5px;padding:10px 2px}
+.fbrow{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #141414}
+.fbrow:last-child{border-bottom:none}
+.fbrow .n{font-family:var(--mono);font-size:11px;color:var(--mut2);width:18px}
+.fbrow .id{font-family:var(--mono);font-size:12px;flex:1;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:12.5px}
+.switch input{display:none}
+.switch .t{width:34px;height:18px;border-radius:10px;background:#222;border:1px solid var(--line2);
+  position:relative;transition:background .12s,border-color .12s;flex:0 0 auto}
+.switch .t:after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;
+  background:var(--mut);transition:transform .12s,background .12s}
+.switch input:checked+.t{background:#12233d;border-color:var(--ac)}
+.switch input:checked+.t:after{transform:translateX(16px);background:var(--ac)}
+.statusbar{height:23px;flex:0 0 23px;display:flex;align-items:center;gap:16px;padding:0 10px;
+  background:var(--pane);border-top:1px solid var(--line);font-family:var(--mono);font-size:11px;
+  color:var(--mut2);overflow:hidden;white-space:nowrap}
+.statusbar .it{display:flex;align-items:center;gap:5px}
+.statusbar .sp{flex:1}
+.statusbar b{color:var(--mut);font-weight:500}
+
+#toast{position:fixed;left:50%;bottom:34px;transform:translate(-50%,10px);background:#111;
+  border:1px solid var(--line2);color:var(--tx);padding:7px 14px;border-radius:4px;font-size:12.5px;
+  opacity:0;pointer-events:none;transition:opacity .16s,transform .16s;z-index:60;max-width:80vw;
+  font-family:var(--mono)}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+#loginCard{display:none}
+.danger-zone{border:1px solid #2a1616;border-radius:4px;padding:12px 14px;margin-top:14px}
+.facts{font-size:12px;color:var(--mut);line-height:1.75}
+.facts code{font-family:var(--mono);font-size:11.5px;color:#b9c6d6}
+@media (max-width:760px){
+  .sidebar{display:none}
+  .doc{padding:16px 14px 60px}
+  .field>*{min-width:120px}
+}
+</style>
+</head>
+<body>
+
+<div id="loginCard" hidden></div>
+<div id="app" hidden><input id="tok" type="hidden"></div>
+
+<div id="shell">
+  <div class="menubar">
+    <span class="brand"><b>zero</b>stack · admin</span>
+    <button class="menu" onclick="show('models')">Models</button>
+    <button class="menu" onclick="show('providers')">Providers</button>
+    <button class="menu" onclick="show('keys')">Keys</button>
+    <button class="menu" onclick="show('password')">Password</button>
+    <button class="menu" onclick="show('status')">Status</button>
+    <span class="grow"></span>
+    <span class="stat"><span class="dot" id="gdot"></span><span id="gwstat">gateway</span></span>
+  </div>
+
+  <div class="body">
+    <nav class="actbar">
+      <button class="act on" data-pane="models" onclick="show('models')"><span class="g">◆</span>MODELS</button>
+      <button class="act" data-pane="providers" onclick="show('providers')"><span class="g">▤</span>PROVIDER</button>
+      <button class="act" data-pane="keys" onclick="show('keys')"><span class="g">⚿</span>KEYS</button>
+      <button class="act" data-pane="password" onclick="show('password')"><span class="g">⚿</span>PASS</button>
+      <button class="act" data-pane="status" onclick="show('status')"><span class="g">◷</span>STATUS</button>
+      <span class="sp"></span>
+      <button class="act" onclick="location.href='/pi'"><span class="g">❯</span>CHAT</button>
+    </nav>
+
+    <aside class="sidebar">
+      <div class="hd">Explorer</div>
+      <div class="tree" id="tree">
+        <div class="node on" data-pane="models" onclick="show('models')"><span class="k">◆</span>Models</div>
+        <div id="treeProvs"></div>
+        <div class="node" data-pane="keys" onclick="show('keys')"><span class="k">⚿</span>Keys &amp; secrets</div>
+        <div class="node" data-pane="password" onclick="show('password')"><span class="k">⚿</span>Set password</div>
+        <div class="node" data-pane="status" onclick="show('status')"><span class="k">◷</span>Status</div>
+      </div>
+      <div class="sidefoot">
+        <button onclick="loadAll()">Refresh</button>
+        <button onclick="restartGw()">Restart</button>
+      </div>
+    </aside>
+
+    <main class="editor">
+      <div class="tabs">
+        <button class="tab on" data-pane="models" onclick="show('models')">models.toml</button>
+        <button class="tab" data-pane="providers" onclick="show('providers')">providers</button>
+        <button class="tab" data-pane="keys" onclick="show('keys')">keys.env</button>
+        <button class="tab" data-pane="password" onclick="show('password')">password</button>
+        <button class="tab" data-pane="status" onclick="show('status')">status.log</button>
+        <span class="sp"></span>
+      </div>
+
+      <!-- ============ MODELS ============ -->
+      <section class="pane" id="pane-models">
+        <div class="doc">
+          <h1>Models</h1>
+          <p class="lead">Every model in one list. The first one is the default; the rest is the fallback order.</p>
+
+          <div class="sec">
+            <h2>Models — fallback order</h2>
+            <p class="hint" style="margin-top:0">The list IS the order. <b style="color:var(--fg)">#1 is the default</b> — every chat uses it first. If it fails and fallback is on, the gateway tries #2, then #3, and so on. Use ↑ Up / ↓ Down to reorder.</p>
+            <div class="field tight" style="align-items:center;gap:18px">
+              <label class="switch" title="When off, only the default model is used">
+                <input type="checkbox" id="fbToggle" onchange="toggleFallback()"><span class="t"></span>
+                Fallback on failure
+              </label>
+              <span class="hint" style="margin:0">off = only the default · on = try the next model in order</span>
+            </div>
+            <div id="models" style="margin-top:12px"></div>
+          </div>
+
+          <div class="sec">
+            <h2>Providers</h2>
+            <p class="hint" style="margin-top:0">Load models fetches what this provider really serves (using its saved key) — tick what you want and add them. Add key appends another key for this provider; the gateway rotates through them.</p>
+            <div id="provListMain"></div>
+            <div id="provTickWrap" hidden style="margin-top:12px">
+              <label style="font-size:11px;color:var(--mut);font-family:var(--mono)" id="provTickLabel">Pick the models to add</label>
+              <div class="ticks" id="provTicks"></div>
+              <div class="field tight" style="margin-top:8px">
+                <button class="primary" onclick="addProvTicked()">Add selected</button>
+                <button onclick="hideProvTicks()">Cancel</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="sec">
+            <h2>Add a provider</h2>
+            <div class="field">
+              <div><label for="np_display">Display name</label>
+                <input id="np_display" placeholder="OpenRouter"></div>
+              <div><label for="np_name">Provider name</label>
+                <input id="np_name" class="mono" placeholder="openrouter"></div>
+            </div>
+            <div class="field">
+              <div><label for="np_base">Base URL</label>
+                <input id="np_base" class="mono" placeholder="https://openrouter.ai/api/v1"></div>
+              <div><label for="np_key">API key</label>
+                <input id="np_key" type="password" class="mono" placeholder="sk-… (write-only)"></div>
+            </div>
+            <div class="field tight" style="gap:6px;align-items:center">
+              <button class="primary" onclick="addProvider()">Add provider</button>
+              <button onclick="loadProviderModels()">Load models</button>
+              <span class="hint" style="margin:0" id="np_status"></span>
+            </div>
+            <div id="np_tickwrap" hidden style="margin-top:12px">
+              <label style="font-size:11px;color:var(--mut);font-family:var(--mono)">Pick the models to add</label>
+              <div class="ticks" id="np_ticks"></div>
+              <div class="field tight" style="margin-top:8px">
+                <button class="primary" onclick="addTickedModels()">Add selected</button>
+                <button onclick="hideTicks()">Cancel</button>
+              </div>
+            </div>
+            <p class="hint">Load models calls <code>GET {base_url}/models</code> with that key and lists what the provider
+              really serves. If the call fails, add a model by hand below.</p>
+          </div>
+
+          <div class="sec">
+            <h2>Add a model by hand</h2>
+            <div class="field">
+              <div><label for="am_provider">Provider</label>
+                <input id="am_provider" class="mono" placeholder="openrouter"></div>
+              <div><label for="am_model">Model id</label>
+                <input id="am_model" class="mono" placeholder="gpt-4o-mini"></div>
+            </div>
+            <div class="field">
+              <div><label for="am_ctx">Context window</label>
+                <input id="am_ctx" class="mono" placeholder="128000"></div>
+              <div><label for="am_out">Max output</label>
+                <input id="am_out" class="mono" placeholder="8192"></div>
+            </div>
+            <div class="field tight"><button onclick="addModel()">Add model</button></div>
+            <div hidden>
+              <input id="am_name"><input id="am_base"><input id="am_env"><input id="am_key" type="password">
+              <input id="fb_order"><button onclick="setFallback()"></button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ PROVIDERS ============ -->
+      <section class="pane" id="pane-providers" hidden>
+        <div class="doc">
+          <h1>Providers</h1>
+          <p class="lead">Base URL, API style and the key slots. Key values are write-only: once saved, this page can
+            only report whether a slot is set.</p>
+          <div class="sec"><h2>Registered</h2><div id="provList"></div></div>
+          <div class="sec">
+            <h2>Edit provider</h2>
+            <div id="provEditEmpty" class="empty">Pick Edit on a provider above.</div>
+            <div id="provEdit" hidden>
+              <input type="hidden" id="pe_old">
+              <div class="field">
+                <div><label for="pe_display">Display name</label><input id="pe_display"></div>
+                <div><label for="pe_name">Provider name</label><input id="pe_name" class="mono"></div>
+              </div>
+              <div class="field">
+                <div><label for="pe_base">Base URL</label><input id="pe_base" class="mono"></div>
+                <div><label for="pe_style">API style (optional)</label>
+                  <input id="pe_style" class="mono" placeholder="responses"></div>
+              </div>
+              <div class="field tight">
+                <button class="primary" onclick="saveProvider()">Save provider</button>
+                <button onclick="hideProvEdit()">Cancel</button>
+                <button class="danger" onclick="removeProvider()">Remove provider</button>
+              </div>
+            </div>
+          </div>
+          <div class="sec">
+            <h2>API keys</h2>
+            <div id="keySlots"></div>
+            <div class="field" style="margin-top:10px">
+              <div><label for="ks_provider">Provider</label><input id="ks_provider" class="mono" placeholder="openrouter"></div>
+              <div><label for="ks_key">New key</label><input id="ks_key" type="password" class="mono" placeholder="sk-… (write-only)"></div>
+              <div style="flex:0 0 auto;align-self:flex-end"><button onclick="addProviderKey()">Add key</button></div>
+            </div>
+            <p class="hint">More than one key per provider is fine: the gateway rotates through them round-robin on every
+              session spawn. Counter lives in <code>key-rotation.json</code>.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ KEYS ============ -->
+      <section class="pane" id="pane-keys" hidden>
+        <div class="doc">
+          <h1>Keys &amp; secrets</h1>
+          <p class="lead">Stored in <code>provider-keys.env</code> (chmod 600) and the box environment. Values never come back.</p>
+          <div class="sec"><h2>Provider keys</h2><div id="keys"></div></div>
+          <div class="sec">
+            <h2>Set any key</h2>
+            <div class="field">
+              <div><label for="nk_env">Env name</label><input id="nk_env" class="mono" placeholder="OPENROUTER_API_KEY"></div>
+              <div><label for="nk_val">Value</label><input id="nk_val" type="password" class="mono" placeholder="write-only"></div>
+              <div style="flex:0 0 auto;align-self:flex-end"><button onclick="setKey()">Set key</button></div>
+            </div>
+          </div>
+          <div class="sec">
+            <h2>Instabox API key</h2>
+            <div class="field tight" style="align-items:center">
+              <span class="mono" style="flex:0 0 auto">INSTABOX_API_KEY</span>
+              <span id="instaboxBadge" class="pill">…</span>
+            </div>
+            <div class="field" style="margin-top:8px">
+              <div><label for="instabox_key">ibk_… key</label>
+                <input id="instabox_key" type="password" class="mono" placeholder="ibk_… from the Instabox dashboard"></div>
+              <div style="flex:0 0 auto;align-self:flex-end"><button onclick="setInstabox()">Save key</button></div>
+            </div>
+            <p class="hint">Used by Muse to create, start, stop and SSH into the browser machine.</p>
+          </div>
+          <div class="sec">
+            <h2>Monid search key</h2>
+            <div class="field tight" style="align-items:center">
+              <span class="mono" style="flex:0 0 auto">monid/credentials.yaml</span>
+              <span id="monidBadge" class="pill">…</span>
+            </div>
+            <div class="field" style="margin-top:8px">
+              <div><label for="monid_key">mk_… key</label>
+                <input id="monid_key" type="password" class="mono" placeholder="mk_… from the Monid dashboard"></div>
+              <div style="flex:0 0 auto;align-self:flex-end"><button onclick="setMonid()">Save key</button></div>
+            </div>
+            <p class="hint">Combined search inside the server (TinyFish free + cf-search Worker).</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ PASSWORD ============ -->
+      <section class="pane" id="pane-password" hidden>
+        <div class="doc">
+          <h1>Set password</h1>
+          <p class="lead">The opening password for this page and the chat page. Stored as a SHA-256 hash in
+            <code>gateway.env</code>; it applies immediately, no restart.</p>
+          <div class="sec">
+            <h2>Set password</h2>
+            <div class="field">
+              <div><label for="admin_pw">New password</label>
+                <input id="admin_pw" type="password" placeholder="at least 6 characters" autocomplete="new-password"></div>
+              <div style="flex:0 0 auto;align-self:flex-end"><button class="primary" onclick="setAdminPw()">Set password</button></div>
+            </div>
+            <p class="hint">After this, unlock with your password — the gateway token still works as a fallback.
+              Five wrong tries lock the form for ten minutes.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ STATUS ============ -->
+      <section class="pane" id="pane-status" hidden>
+        <div class="doc">
+          <h1>Status</h1>
+          <p class="lead">Gateway health, restart, and the ACP facts this build is shaped by.</p>
+          <div class="sec">
+            <h2>Gateway</h2>
+            <table class="grid"><tbody>
+              <tr><td class="mono" style="width:150px">health</td><td><span id="health" class="pill">…</span></td></tr>
+              <tr><td class="mono">default</td><td class="mono" id="deflt">—</td></tr>
+              <tr><td class="mono">sessions</td><td class="mono" id="sessCount">—</td></tr>
+              <tr><td class="mono">build</td><td class="mono" id="buildInfo">—</td></tr>
+            </tbody></table>
+            <div class="field tight" style="margin-top:12px">
+              <button onclick="loadAll()">Refresh</button>
+              <button onclick="restartGw()">Restart gateway</button>
+            </div>
+            <p class="hint">Restarting drops every live Zerostack process; transcripts stay on disk and resume on the
+              next prompt.</p>
+          </div>
+          <div class="sec">
+            <h2>ACP facts for this build</h2>
+            <div class="facts">
+              Zerostack ACP exposes only <code>initialize</code>, <code>session/new</code>, <code>session/prompt</code>.<br>
+              <code>session/cancel</code> does not exist → Stop ends the session's Zerostack process.<br>
+              No <code>session/load</code> → the gateway stores transcripts and replays a text digest after a respawn.<br>
+              MCP is disabled in ACP mode, so the vault tools are not available through this gateway.
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="statusbar">
+    <span class="it"><span class="dot" id="sdot"></span><b id="sbackend">rust gateway</b></span>
+    <span class="it">port <b id="sport">8766</b></span>
+    <span class="it">default <b id="sdefault">—</b></span>
+    <span class="it">models <b id="scount">0</b></span>
+    <span class="sp"></span>
+    <span class="it" id="smode">fallback —</span>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const OK_TAGS = new Set(("DIV SPAN P B STRONG EM CODE PRE A UL OL LI BR HR TABLE THEAD TBODY TR TH TD " +
+  "LABEL INPUT BUTTON").split(" "));
+const OK_ATTR = new Set(["class","href","title","style","data-pane","data-act","data-id","data-p",
+  "data-i","type","value","placeholder","checked","disabled"]);
+const _parser = new DOMParser();
+function _clean(root){
+  [...root.querySelectorAll("*")].forEach(el => {
+    if (!OK_TAGS.has(el.tagName)) { el.replaceWith(...el.childNodes); return; }
+    [...el.attributes].forEach(a => {
+      const n = a.name.toLowerCase();
+      if (n.startsWith("on") || !OK_ATTR.has(n)) el.removeAttribute(a.name);
+    });
+  });
+}
+const set = (el, html) => {
+  const doc = _parser.parseFromString("<body>" + html + "</body>", "text/html");
+  _clean(doc.body);
+  const frag = document.createDocumentFragment();
+  while (doc.body.firstChild) frag.appendChild(doc.body.firstChild);
+  el.replaceChildren(frag);
+};
+
+let TOK = sessionStorage.getItem("zsgtok") || "";
+let MS = { providers: [], models: [], order: [], default: "", fallback_enabled: true };
+let LOADED = null;
+
+function toast(m, ms){
+  const t = $("toast"); t.textContent = m; t.classList.add("on");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("on"), ms || 3600);
+}
+async function api(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({ "Authorization": "Bearer " + TOK, "Content-Type": "application/json" },
+    opts.headers || {});
+  const r = await fetch(path, opts);
+  let d = {};
+  try { d = await r.json(); } catch(e){}
+  if (r.status === 401) throw new Error("bad token");
+  if (!r.ok) throw new Error((d && d.error) || ("HTTP " + r.status));
+  return d;
+}
+
+/* ---------- pane switching ---------- */
+function show(pane){
+  document.querySelectorAll(".pane").forEach(p => p.hidden = p.id !== "pane-" + pane);
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("on", t.dataset.pane === pane));
+  document.querySelectorAll(".actbar .act").forEach(a =>
+    a.classList.toggle("on", a.dataset.pane === pane));
+  document.querySelectorAll(".tree .node").forEach(n =>
+    n.classList.toggle("on", n.dataset.pane === pane));
+}
+
+/* ---------- login ---------- */
+async function saveTok(){
+  const v = $("tok") ? $("tok").value.trim() : "";
+  return unlock(v);
+}
+async function unlock(v){
+  if (!v) return;
+  if (/^[0-9a-f]{43}$/i.test(v)) { TOK = v; sessionStorage.setItem("zsgtok", TOK); return loadAll(); }
+  try {
+    const r = await fetch("/admin-login", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: v }) });
+    if (r.ok) { const d = await r.json(); TOK = d.token; sessionStorage.setItem("zsgtok", TOK); return loadAll(); }
+    // Login failed: show the real reason instead of silently retrying with
+    // the raw password as a token (that just loops back to this login).
+    let msg = "Wrong password — try again, or log in with the gateway token.";
+    try { const d = await r.json(); if (d && d.error) msg = d.error; } catch(e){}
+    if (r.status === 429) msg = "Too many attempts — wait a few minutes, then try again.";
+    if (r.status === 400) msg = "No opening password is set — log in with the gateway token.";
+    toast(msg, 6000);
+    const err = $("pwgate_err"); if (err) err.textContent = msg;
+    return;
+  } catch(e){
+    toast("Could not reach the gateway — check the connection and try again.", 6000);
+    return;
+  }
+}
+function showLogin(){
+  const lc = $("loginCard");
+  lc.style.display = "block";
+  document.body.insertAdjacentHTML("beforeend", "");
+  if (!$("pwgate")) {
+    const d = document.createElement("div");
+    d.id = "pwgate";
+    d.style.cssText = "position:fixed;inset:0;background:#000;z-index:80;display:flex;align-items:center;justify-content:center";
+    d.innerHTML = '<div style="width:340px;border:1px solid #262626;border-radius:6px;padding:22px;background:#080808">' +
+      '<div class="mono" style="font-size:11px;letter-spacing:.14em;color:#8a8a8a;margin-bottom:12px">ZEROSTACK ADMIN</div>' +
+      '<div style="height:1px;background:#1c1c1c;margin-bottom:14px"></div>' +
+      '<label style="font-size:11px;color:#8a8a8a;font-family:ui-monospace,monospace;display:block;margin-bottom:5px">Opening password</label>' +
+      '<input id="pwgate_in" type="password" placeholder="password or gateway token" autocomplete="current-password" style="width:100%;background:#0d0d0d;border:1px solid #262626;border-radius:4px;color:#e8e8e8;padding:6px 9px;font:13px ui-monospace,monospace;outline:none">' +
+      '<button id="pwgate_btn" style="margin-top:10px;width:100%;background:#4c8dff;color:#000;border:1px solid #4c8dff;border-radius:4px;padding:6px;font:600 13px system-ui;cursor:pointer">Unlock</button>' +
+      '<div id="pwgate_err" style="margin-top:10px;min-height:16px;color:#ff6b6b;font-size:12px"></div>' +
+      '<div style="font-size:11px;color:#5f5f5f;margin-top:10px;line-height:1.5">Your opening password, or the gateway token.</div></div>';
+    document.body.appendChild(d);
+    $("pwgate_btn").onclick = async () => {
+      const v = $("pwgate_in").value.trim();
+      if (!v) return;
+      await unlock(v);
+      if (LOADED) d.remove();
+      else toast("Could not unlock with that value");
+    };
+    $("pwgate_in").addEventListener("keydown", e => { if (e.key === "Enter") $("pwgate_btn").click(); });
+    $("pwgate_in").focus();
+  }
+}
+
+/* ---------- load ---------- */
+async function loadAll(){
+  try {
+    const [health, ms, keys, instabox, monid] = await Promise.all([
+      api("/health"), api("/model-system"), api("/keys"), api("/instabox-key"), api("/monid")]);
+    LOADED = true;
+    const gate = $("pwgate"); if (gate) gate.remove();
+    const lc = $("loginCard"); if (lc) lc.style.display = "none";
+    $("shell").classList.add("on");
+    $("gdot").className = "dot ok";
+    $("sdot").className = "dot ok";
+    $("gwstat").textContent = "running";
+    $("health").textContent = health.ok ? "running" : "?";
+    $("health").className = "pill ok";
+    $("sessCount").textContent = health.sessions_running + " running";
+    $("buildInfo").textContent = (health.impl || "python") + " · pid " + (health.pid || "—");
+    MS = ms;
+    renderModels(ms);
+    renderProviders(ms);
+    renderKeySlots(ms);
+    renderKeys(keys);
+    $("instaboxBadge").textContent = instabox.set ? "set" : "not set";
+    $("instaboxBadge").className = "pill " + (instabox.set ? "ok" : "no");
+    $("monidBadge").textContent = monid.set ? "set" : "not set";
+    $("monidBadge").className = "pill " + (monid.set ? "ok" : "no");
+  } catch(e){
+    LOADED = null;
+    $("gdot").className = "dot bad";
+    $("sdot").className = "dot bad";
+    showLogin();
+    if (TOK) toast(e.message);
+  }
+}
+
+/* ---------- models section ---------- */
+function renderModels(ms){
+  const byKey = {};
+  (ms.models || []).forEach(m => byKey[m.key] = m);
+  const order = (ms.order || []).filter(k => byKey[k]);
+  (ms.models || []).forEach(m => { if (!order.includes(m.key)) order.push(m.key); });
+  $("fbToggle").checked = !!ms.fallback_enabled;
+
+  const def = order[0] || "";
+  $("sdefault").textContent = def || "—";
+  $("deflt").textContent = def || "—";
+  $("scount").textContent = String((ms.models || []).length);
+  $("smode").textContent = "fallback " + (ms.fallback_enabled ? "on" : "off");
+
+  if (!order.length){
+    set($("models"), '<div class="empty">No models yet. Add a provider below, load its models and tick what you want.</div>');
+    return;
+  }
+  let html = '<table class="grid"><thead><tr><th style="width:34px">#</th><th>Model</th>' +
+    '<th style="width:150px">Provider</th><th style="width:120px">Context</th><th style="width:150px"></th></tr></thead><tbody>';
+  order.forEach((k, i) => {
+    const m = byKey[k] || { id: k, provider: "?", context: 0, output: 0 };
+    html += '<tr class="' + (i === 0 ? "def" : "") + '"><td class="mono mut2">' + (i + 1) + "</td>" +
+      '<td class="mono">' + esc(m.id) + (i === 0 ? '<span class="mk">default</span>' : "") + "</td>" +
+      '<td class="mono mut">' + esc(m.provider) + "</td>" +
+      '<td class="mono mut2">' + (m.context ? Number(m.context).toLocaleString() : "—") + "</td>" +
+      '<td><div class="rowbtns">' +
+      '<button data-act="up" data-id="' + esc(k) + '" title="Move up in the fallback order">↑ Up</button>' +
+      '<button data-act="down" data-id="' + esc(k) + '" title="Move down in the fallback order">↓ Down</button>' +
+      '<button data-act="edit" data-id="' + esc(k) + '" title="Edit">edit</button>' +
+      '<button class="danger" data-act="rm" data-id="' + esc(k) + '" title="Remove">rm</button>' +
+      "</div></td></tr>";
+  });
+  html += "</tbody></table>";
+  set($("models"), html);
+
+  // provider tree in the sidebar
+  const provs = ms.providers || [];
+  let th = "";
+  provs.forEach(p => {
+    th += '<div class="node" data-pane="providers" onclick="show(\'providers\')"><span class="k">▤</span>' +
+      esc(p.display || p.name) + '</div>';
+    (p.models || []).forEach(m => {
+      th += '<div class="sub" title="' + esc(p.name + "/" + m.id) + '">' + esc(m.id) + "</div>";
+    });
+  });
+  set($("treeProvs"), th);
+}
+
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-act]");
+  if (!b) return;
+  const act = b.dataset.act, key = b.dataset.id;
+  if (!key) return;
+  if (act === "up" || act === "down"){
+    const order = (MS.order || []).slice();
+    const i = order.indexOf(key);
+    if (i < 0) return;
+    const j = act === "up" ? i - 1 : i + 1;
+    if (j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    try { MS = await api("/model-order", { method: "POST", body: JSON.stringify({ order }) }); loadAll();
+      toast("Order saved"); } catch(err){ toast(err.message); }
+  } else if (act === "edit"){
+    const m = (MS.models || []).find(x => x.key === key);
+    if (!m) return;
+    openModelEdit(m);
+  } else if (act === "rm"){
+    const m = (MS.models || []).find(x => x.key === key);
+    if (!m) return;
+    if (!confirm('Remove model "' + m.id + '" from ' + m.provider + "?")) return;
+    try {
+      MS = await api("/models", { method: "POST",
+        body: JSON.stringify({ action: "remove", provider: m.provider, id: m.id }) });
+      loadAll(); toast("Model removed");
+    } catch(err){ toast(err.message); }
+  }
+});
+
+function openModelEdit(m){
+  show("models");
+  const row = document.querySelector('#models [data-act="edit"][data-id="' + CSS.escape(m.key) + '"]');
+  const host = $("models");
+  const box = document.createElement("div");
+  box.id = "modelEdit";
+  box.style.cssText = "border:1px solid #262626;border-radius:4px;padding:12px;margin-top:12px";
+  box.innerHTML =
+    '<div style="font-family:ui-monospace,monospace;font-size:11px;color:#8a8a8a;margin-bottom:10px">EDIT ' +
+    esc(m.provider) + " / " + esc(m.id) + "</div>" +
+    '<div class="field"><div><label>Model id</label><input id="me_id" class="mono" value="' + esc(m.id) + '"></div>' +
+    '<div><label>Context window</label><input id="me_ctx" class="mono" value="' + (m.context || "") + '"></div>' +
+    '<div><label>Max output</label><input id="me_out" class="mono" value="' + (m.output || "") + '"></div></div>' +
+    '<div class="field tight"><button class="primary" id="me_save">Save model</button>' +
+    '<button id="me_cancel">Cancel</button></div>';
+  const old = document.getElementById("modelEdit");
+  if (old) old.remove();
+  host.appendChild(box);
+  $("me_cancel").onclick = () => box.remove();
+  $("me_save").onclick = async () => {
+    try {
+      MS = await api("/models", { method: "POST", body: JSON.stringify({
+        action: "edit", provider: m.provider, id: m.id,
+        new_id: $("me_id").value.trim(),
+        context: parseInt($("me_ctx").value || "0", 10) || 0,
+        output: parseInt($("me_out").value || "0", 10) || 0 }) });
+      loadAll(); toast("Model saved");
+    } catch(err){ toast(err.message); }
+  };
+  box.scrollIntoView({ block: "nearest" });
+  if (row) row.classList.add("on");
+}
+
+/* ---------- fallback toggle ---------- */
+async function toggleFallback(){
+  try {
+    MS = await api("/model-order", { method: "POST",
+      body: JSON.stringify({ fallback_enabled: $("fbToggle").checked }) });
+    $("smode").textContent = "fallback " + (MS.fallback_enabled ? "on" : "off");
+    toast("Fallback " + (MS.fallback_enabled ? "on" : "off"));
+  } catch(e){ toast(e.message); }
+}
+
+/* ---------- add provider / load models ---------- */
+async function addProvider(){
+  const display = $("np_display").value.trim();
+  const name = $("np_name").value.trim();
+  const base = $("np_base").value.trim();
+  const key = $("np_key").value.trim();
+  if (!name || !base){ toast("provider name and base URL are required"); return; }
+  try {
+    MS = await api("/providers", { method: "POST", body: JSON.stringify({
+      action: "add", name, display, base_url: base, api_key: key }) });
+    $("np_key").value = "";
+    $("np_status").textContent = "provider added";
+    $("am_provider").value = name;
+    $("ks_provider").value = name;
+    loadAll();
+    toast("Provider added: " + name);
+    if (key) loadProviderModels();
+  } catch(e){ toast(e.message); }
+}
+
+let TICKED = [];
+async function loadProviderModels(){
+  const base = $("np_base").value.trim();
+  const key = $("np_key").value.trim();
+  const name = $("np_name").value.trim();
+  if (!base && !name){ toast("enter the base URL (or an existing provider name)"); return; }
+  $("np_status").textContent = "loading…";
+  try {
+    const d = await api("/provider-models", { method: "POST",
+      body: JSON.stringify({ base_url: base, api_key: key, provider: name }) });
+    TICKED = d.models || [];
+    if (!TICKED.length){ $("np_status").textContent = "provider returned no models"; return; }
+    $("np_status").textContent = TICKED.length + " models";
+    let html = "";
+    TICKED.forEach((m, i) => {
+      html += '<label class="tick"><input type="checkbox" data-i="' + i + '"' +
+        (i < 40 ? " checked" : "") + '><span>' + esc(m.id) + "</span>" +
+        '<span class="c">' + (m.context ? Number(m.context).toLocaleString() : "") + "</span></label>";
+    });
+    set($("np_ticks"), html);
+    $("np_tickwrap").hidden = false;
+  } catch(e){
+    $("np_status").textContent = "load failed — add models by hand below";
+    toast("Load models: " + e.message, 6000);
+  }
+}
+function hideTicks(){ $("np_tickwrap").hidden = true; }
+async function addTickedModels(){
+  const name = $("np_name").value.trim() || $("am_provider").value.trim();
+  if (!name){ toast("provider name is missing"); return; }
+  const picks = [...document.querySelectorAll("#np_ticks input[type=checkbox]")]
+    .filter(c => c.checked).map(c => TICKED[+c.dataset.i]);
+  if (!picks.length){ toast("tick at least one model"); return; }
+  try {
+    MS = await api("/models", { method: "POST",
+      body: JSON.stringify({ action: "add", provider: name, models: picks }) });
+    hideTicks();
+    loadAll();
+    toast(picks.length + " model(s) added to " + name);
+  } catch(e){ toast(e.message); }
+}
+
+/* legacy manual add (kept working) */
+async function addModel(){
+  const provider = $("am_provider").value.trim();
+  const id = $("am_model").value.trim();
+  if (!provider || !id){ toast("provider and model id are needed"); return; }
+  const ctx = parseInt($("am_ctx").value || "0", 10) || 0;
+  const out = parseInt($("am_out").value || "0", 10) || 0;
+  try {
+    MS = await api("/models", { method: "POST", body: JSON.stringify({
+      action: "add", provider, models: [{ id, context: ctx, output: out }] }) });
+    loadAll(); toast("Model added: " + id);
+  } catch(e){ toast(e.message); }
+}
+async function setFallback(){ toast("Use the fallback toggle in Models"); }
+
+/* ---------- providers ---------- */
+function renderProviders(ms){
+  const provs = ms.providers || [];
+  if (!provs.length){
+    set($("provList"), '<div class="empty">No providers yet.</div>');
+    const pm = $("provListMain"); if (pm) set(pm, '<div class="empty">No providers yet — add one below.</div>');
+    return;
+  }
+  let html = "";
+  provs.forEach(p => {
+    const keysset = (p.keys || []).filter(k => k.set).length;
+    html += '<div class="prov" data-prov="' + esc(p.name) + '"><span class="nm">' + esc(p.name) + "</span>" +
+      '<span class="pill ' + (keysset ? "ok" : "no") + '">' + keysset + " key" + (keysset === 1 ? "" : "s") + "</span>" +
+      '<span class="u">' + esc(p.base_url || "no base url") + "</span>" +
+      '<span class="mono mut2">' + (p.models || []).length + " models</span>" +
+      '<div class="rowbtns"><button data-act="pload" data-id="' + esc(p.name) + '" title="Load this provider\u2019s models">Load models</button>' +
+      '<button data-act="pkey" data-id="' + esc(p.name) + '" title="Add another key for this provider">Add key</button>' +
+      '<button data-act="pedit" data-id="' + esc(p.name) + '">edit</button>' +
+      '<button class="danger" data-act="prm" data-id="' + esc(p.name) + '">rm</button></div>' +
+      '<div class="provKey" hidden><input type="password" class="mono" placeholder="new key (write-only)">' +
+      '<button class="primary" data-act="pkeysave" data-id="' + esc(p.name) + '">Save key</button>' +
+      '<button data-act="pkeycancel" data-id="' + esc(p.name) + '">Cancel</button></div></div>';
+  });
+  set($("provList"), html);
+  const pm = $("provListMain"); if (pm) set(pm, html);
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-act]");
+  if (!b) return;
+  const act = b.dataset.act, name = b.dataset.id;
+  if (act === "pedit"){
+    const p = (MS.providers || []).find(x => x.name === name);
+    if (!p) return;
+    show("providers");
+    $("provEditEmpty").hidden = true;
+    $("provEdit").hidden = false;
+    $("pe_old").value = p.name;
+    $("pe_display").value = p.display || p.name;
+    $("pe_name").value = p.name;
+    $("pe_base").value = p.base_url || "";
+    $("pe_style").value = p.api_style || "";
+  } else if (act === "prm"){
+    if (!confirm('Remove provider "' + name + '" and all its models?')) return;
+    try {
+      MS = await api("/providers", { method: "POST",
+        body: JSON.stringify({ action: "remove", name }) });
+      loadAll(); toast("Provider removed");
+    } catch(err){ toast(err.message); }
+  } else if (act === "krm"){
+    const prov = b.dataset.p;
+    const env = b.dataset.id;
+    if (!confirm("Remove key slot " + env + "?")) return;
+    try {
+      await api("/provider-keys", { method: "POST",
+        body: JSON.stringify({ action: "remove", provider: prov, env_name: env }) });
+      loadAll(); toast("Key slot removed");
+    } catch(err){ toast(err.message); }
+  } else if (act === "pload"){
+    loadProvModels(name);
+  } else if (act === "pkey"){
+    const row = b.closest(".prov");
+    if (!row) return;
+    const box = row.querySelector(".provKey");
+    if (box){ box.hidden = !box.hidden; if (!box.hidden) box.querySelector("input").focus(); }
+  } else if (act === "pkeycancel"){
+    const row = b.closest(".prov");
+    if (!row) return;
+    const box = row.querySelector(".provKey");
+    if (box){ box.hidden = true; box.querySelector("input").value = ""; }
+  } else if (act === "pkeysave"){
+    const row = b.closest(".prov");
+    if (!row) return;
+    const inp = row.querySelector(".provKey input");
+    const key = inp ? inp.value.trim() : "";
+    if (!key){ toast("paste the key first"); return; }
+    try {
+      await api("/provider-keys", { method: "POST",
+        body: JSON.stringify({ action: "add", provider: name, api_key: key }) });
+      loadAll(); toast("Key added — it rotates round-robin from now on");
+    } catch(err){ toast(err.message); }
+  }
+});
+
+/* Per-provider model loading: uses the provider's saved key server-side. */
+let PROV_TICKED = [];
+let PROV_TICK_PROVIDER = "";
+async function loadProvModels(name){
+  const wrap = $("provTickWrap");
+  const label = $("provTickLabel");
+  if (label) label.textContent = "Loading " + name + "…";
+  if (wrap) wrap.hidden = false;
+  try {
+    const d = await api("/provider-models", { method: "POST",
+      body: JSON.stringify({ provider: name }) });
+    PROV_TICKED = d.models || [];
+    PROV_TICK_PROVIDER = name;
+    if (!PROV_TICKED.length){ if (label) label.textContent = name + " returned no models"; set($("provTicks"), ""); return; }
+    if (label) label.textContent = "Pick the models to add from " + name + " (" + PROV_TICKED.length + ")";
+    let html = "";
+    PROV_TICKED.forEach((m, i) => {
+      html += '<label class="tick"><input type="checkbox" data-i="' + i + '"' +
+        (i < 40 ? " checked" : "") + "><span>" + esc(m.id) + "</span>" +
+        '<span class="c">' + (m.context ? Number(m.context).toLocaleString() : "") + "</span></label>";
+    });
+    set($("provTicks"), html);
+    if (wrap) wrap.scrollIntoView({ block: "nearest" });
+  } catch(e){
+    if (label) label.textContent = "Load failed — add models by hand below";
+    toast("Load models: " + e.message, 6000);
+  }
+}
+function hideProvTicks(){ const w = $("provTickWrap"); if (w) w.hidden = true; PROV_TICKED = []; }
+async function addProvTicked(){
+  if (!PROV_TICK_PROVIDER){ toast("load a provider's models first"); return; }
+  const picks = [...document.querySelectorAll("#provTicks input[type=checkbox]")]
+    .filter(c => c.checked).map(c => PROV_TICKED[+c.dataset.i]);
+  if (!picks.length){ toast("tick at least one model"); return; }
+  try {
+    MS = await api("/models", { method: "POST",
+      body: JSON.stringify({ action: "add", provider: PROV_TICK_PROVIDER, models: picks }) });
+    hideProvTicks(); loadAll(); toast(picks.length + " model(s) added from " + PROV_TICK_PROVIDER);
+  } catch(e){ toast(e.message); }
+}
+function hideProvEdit(){ $("provEdit").hidden = true; $("provEditEmpty").hidden = false; }
+async function saveProvider(){
+  try {
+    MS = await api("/providers", { method: "POST", body: JSON.stringify({
+      action: "edit", old_name: $("pe_old").value, name: $("pe_name").value.trim(),
+      display: $("pe_display").value.trim(), base_url: $("pe_base").value.trim(),
+      api_style: $("pe_style").value.trim() }) });
+    hideProvEdit(); loadAll(); toast("Provider saved");
+  } catch(e){ toast(e.message); }
+}
+async function removeProvider(){
+  const name = $("pe_old").value;
+  if (!confirm('Remove provider "' + name + '" and all its models?')) return;
+  try {
+    MS = await api("/providers", { method: "POST", body: JSON.stringify({ action: "remove", name }) });
+    hideProvEdit(); loadAll(); toast("Provider removed");
+  } catch(e){ toast(e.message); }
+}
+
+function renderKeySlots(ms){
+  const provs = (ms.providers || []).filter(p => (p.keys || []).length);
+  if (!provs.length){ set($("keySlots"), '<div class="empty">No key slots yet.</div>'); return; }
+  let html = '<table class="grid"><thead><tr><th>Provider</th><th>Slot</th><th style="width:90px">State</th>' +
+    '<th style="width:90px"></th></tr></thead><tbody>';
+  provs.forEach(p => {
+    (p.keys || []).forEach((k, i) => {
+      html += "<tr><td class=\"mono\">" + (i === 0 ? esc(p.name) : "") + "</td>" +
+        '<td class="mono mut">' + esc(k.env) + "</td>" +
+        '<td><span class="pill ' + (k.set ? "ok" : "no") + '">' + (k.set ? "set" : "not set") + "</span></td>" +
+        '<td><div class="rowbtns">' +
+        (k.set && (k.env !== p.api_key_env)
+          ? '<button class="danger" data-act="krm" data-p="' + esc(p.name) + '" data-id="' + esc(k.env) + '">rm</button>'
+          : '<span class="mut2 mono" style="font-size:10px">' + (k.env === p.api_key_env ? "primary" : "") + "</span>") +
+        "</div></td></tr>";
+    });
+  });
+  html += "</tbody></table>";
+  set($("keySlots"), html);
+}
+async function addProviderKey(){
+  const provider = $("ks_provider").value.trim();
+  const key = $("ks_key").value.trim();
+  if (!provider || !key){ toast("provider and key are both needed"); return; }
+  try {
+    await api("/provider-keys", { method: "POST",
+      body: JSON.stringify({ action: "add", provider, api_key: key }) });
+    $("ks_key").value = "";
+    loadAll(); toast("Key added — it rotates round-robin from now on");
+  } catch(e){ toast(e.message); }
+}
+
+/* ---------- keys / secrets ---------- */
+function renderKeys(d){
+  const keys = d.keys || [];
+  if (!keys.length){ set($("keys"), '<div class="empty">No provider keys referenced.</div>'); return; }
+  let html = '<table class="grid"><thead><tr><th>Env name</th><th style="width:100px">State</th></tr></thead><tbody>';
+  keys.forEach(k => {
+    html += '<tr><td class="mono">' + esc(k.env_name) + '</td><td><span class="pill ' +
+      (k.set ? "ok" : "no") + '">' + (k.set ? "set" : "not set") + "</span></td></tr>";
+  });
+  set($("keys"), html + "</tbody></table>");
+}
+async function setKey(){
+  const e = $("nk_env").value.trim(), v = $("nk_val").value.trim();
+  if (!e || !v){ toast("env name and key value are both needed"); return; }
+  try {
+    await api("/secret", { method: "POST", body: JSON.stringify({ env_name: e, value: v }) });
+    $("nk_env").value = ""; $("nk_val").value = ""; loadAll(); toast("Key saved");
+  } catch(err){ toast(err.message); }
+}
+async function setInstabox(){
+  const v = $("instabox_key").value.trim();
+  if (!v){ toast("paste the Instabox key first"); return; }
+  try {
+    await api("/instabox-key", { method: "POST", body: JSON.stringify({ key: v }) });
+    $("instabox_key").value = ""; loadAll(); toast("Instabox key saved on the box");
+  } catch(e){ toast(e.message); }
+}
+async function setMonid(){
+  const v = $("monid_key").value.trim();
+  if (!v){ toast("paste the Monid key first"); return; }
+  try {
+    await api("/monid", { method: "POST", body: JSON.stringify({ key: v }) });
+    $("monid_key").value = ""; loadAll(); toast("Monid key saved on the box");
+  } catch(e){ toast(e.message); }
+}
+async function setAdminPw(){
+  const v = $("admin_pw").value;
+  if (v.length < 6){ toast("password must be at least 6 characters"); return; }
+  try {
+    await api("/admin-password", { method: "POST", body: JSON.stringify({ password: v }) });
+    $("admin_pw").value = "";
+    toast("Opening password set — it is live now");
+  } catch(e){ toast(e.message); }
+}
+async function makeDefault(p, m){
+  try {
+    MS = await api("/settings", { method: "POST",
+      body: JSON.stringify({ defaultProvider: p, defaultModel: m }) });
+    loadAll(); toast("Default set: " + p + "/" + m);
+  } catch(e){ toast(e.message); }
+}
+async function restartGw(){
+  try { await api("/restart", { method: "POST", body: "{}" }); toast("Restarting…"); } catch(e){}
+  for (let i = 0; i < 24; i++){
+    await new Promise(r => setTimeout(r, 1200));
+    try {
+      const h = await fetch("/health").then(r => r.json());
+      if (h.ok){ toast("Gateway back up"); loadAll(); return; }
+    } catch(e){}
+  }
+  toast("Gateway did not answer yet");
+}
+
+/* keyboard: 1..5 switch panes */
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" && e.target.type !== "checkbox") return;
+  const map = { "1": "models", "2": "providers", "3": "keys", "4": "password", "5": "status" };
+  if (map[e.key] && (e.altKey || e.ctrlKey)){ e.preventDefault(); show(map[e.key]); }
+});
+
+if (TOK) loadAll(); else showLogin();
+</script>
+</body>
+</html>
