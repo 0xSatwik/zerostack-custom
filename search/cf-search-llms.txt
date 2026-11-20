@@ -1,0 +1,277 @@
+# cf-search — llms.txt
+
+A search-only Cloudflare Worker that returns Bing web/image/video/news
+results as clean plain text. Built for AI agents (Pi, Muse) that need
+fast, free, filterable search without an API key.
+
+- Live URL: https://cf-search.akamithun-search.workers.dev
+- Health: GET /health returns one line: ok cf-search web images videos news
+- Docs: GET /llms.txt (this file) or GET /llm.txt (identical).
+- No auth, no key, no sign-in. Free tier Worker. Source: cf-search-worker/
+  (src/index.js). One endpoint: /search (Bing). Accepts GET query params
+  or POST with a JSON body.
+
+THIS FILE IS THE MANUAL. An AI agent that reads this file knows
+everything needed to use this Worker. No other doc is required.
+
+================================================================
+FOR AI AGENTS - START HERE
+================================================================
+
+THE 3 CORE RECIPES:
+  1. Web search: GET /search?q=<terms>&count=10
+     Returns plain text, one line per result: "N. Title - URL".
+  2. Filtered search: GET /search?q=<terms>&vertical=news&time=week&setlang=en-IN&cc=IN
+     Every Bing filter works — vertical, count, language, country,
+     market, safe search, time range, image/video/news filters.
+  3. Country-wise search: run the SAME query twice with different
+     setlang+cc (e.g. en-IN/IN vs en-US/US) to get genuinely different,
+     region-specific result sets.
+
+No User-Agent header is required. No API key. CORS is open
+(Access-Control-Allow-Origin: *), so browser and agent clients can
+call it directly. Results are not cached (Cache-Control: no-store) —
+every call fetches fresh from Bing.
+
+================================================================
+SECTION A - RESPONSE FORMAT (single format, always)
+================================================================
+
+Every search returns plain text only. No JSON, no format parameter,
+no separate endpoint for the original results. One line per result:
+
+```
+Search: bitcoin (web, 3 results)
+1. Bitcoin price today - https://coinmarketcap.com/currencies/bitcoin/
+2. BTC USD — Bitcoin Price and Chart — TradingView - https://www.tradingview.com/symbols/BTCUSD/
+3. Bitcoin - Open source P2P money - https://bitcoin.org/
+```
+
+The first line is a header: the query, the vertical, and the real
+number of results returned. When page > 1 it also shows the page, e.g.
+`Search: bitcoin (web, 5 results, page 2)`. Then one numbered line per
+result: title, a space-dash-space, then the URL. If the upstream fails,
+a second line says "Error: upstream_failed" (or "upstream_403" etc.)
+and there are no result lines. If the query is missing or too long,
+the Worker answers HTTP 400 with `error: q is required (1..500 chars)`.
+
+A1. WHY THIS FORMAT (token research, 2026-11-19)
+
+Measured on the same 3 real bitcoin results, approximate tokens (chars/4):
+
+- Full JSON (query + filters + results + metadata): 317 tokens, 106 per result
+- JSON results array only: 259 tokens, 86 per result
+- Text with title + URL + snippet + published date: 209 tokens, 70 per result
+- Text with title + URL + snippet: 190 tokens, 63 per result
+- Markdown links + snippet: 191 tokens, 64 per result
+- Pipe-separated title|url|snippet: 174 tokens, 58 per result
+- Title + URL only (this format): 68 tokens, 23 per result
+
+Title + URL only is the lowest by a wide margin: about 4.7x fewer
+tokens than full JSON and about 2.8x fewer than text with snippets.
+Snippets are dropped on purpose. The title + URL is enough for an
+agent to pick which page to fetch, and fetching the page gives the
+real content anyway. This format is used for every call, always.
+
+A2. URLS ARE CLEAN. Bing redirect URLs are decoded (the `u` param is
+base64 with an `a1` prefix) to clean destination URLs. What you get is
+the real page URL, not a Bing redirect link. Verified live 2026-11-19.
+
+================================================================
+SECTION B - ENDPOINT: /search (Bing)
+================================================================
+
+GET /search?q=... or POST /search with a JSON body. Returns Bing results.
+POST body params override query params when both are given.
+
+B1. FILTERS — COMMON (every vertical)
+
+- `q` (required, 1-500 chars): the search query.
+- `vertical`: web | images | videos | news. Default web.
+- `count`: 1-50. Default 10. Note: web/news via Bing RSS returns at
+  most 10 per query (see Result counts below), so count above 10 has
+  no effect there. Images/videos can return more.
+- `page`: page number 1, 2, 3... Default 1. Sets offset = (page-1) x
+  count. See Pagination below — for web/news it does NOT return new
+  results.
+- `offset` or `first`: exact result offset. Default 0. `page` wins if
+  given.
+- `setlang` or `lang`: UI language, e.g. en-US, en-IN, hi-IN, es-ES,
+  de-DE, fr-FR, pt-BR, ja-JP, zh-CN. Default en-US.
+- `cc` or `region` or `country`: country code, e.g. IN, US, GB, DE, JP.
+  Default: derived from setlang. Change it to get country-specific
+  results.
+- `mkt`: market, e.g. en-IN, en-US. Default: same as setlang.
+- `safesearch`: off | moderate | strict. Default moderate.
+- `time` or `time_range`: day | week | month | year. Recency filter
+  (past 24h, past week, past month, past year). Default: no time filter.
+
+B2. FILTERS — IMAGES ONLY (vertical=images)
+
+- `size`: small | medium | large | wallpaper.
+- `color`: color | bw (black and white).
+- `imgtype`: photo | clipart | line | animated.
+- `face`: face | portrait.
+- `license`: free | free-share | free-modify | public.
+
+B3. FILTERS — VIDEOS ONLY (vertical=videos)
+
+- `duration`: short | medium | long.
+- `resolution`: hd | sd.
+
+B4. FILTERS — NEWS ONLY (vertical=news, Bing News)
+
+- `sort`: date | relevance.
+
+B5. EXAMPLES (/search)
+
+- Web, 10 results, English India:
+  GET /search?q=electric+cars&count=10&setlang=en-IN
+- Web, past week, strict safe search:
+  GET /search?q=cricket&time=week&safesearch=strict
+- Images, large black-and-white, 20 results:
+  GET /search?q=mountain&vertical=images&size=large&color=bw&count=20
+- Videos, short, HD:
+  GET /search?q=yoga&vertical=videos&duration=short&resolution=hd&count=10
+- Bing News, sorted by date:
+  GET /search?q=spacex&vertical=news&sort=date&count=10
+- POST with JSON body:
+  POST /search {"q":"quantum computing","count":5}
+- Country-wise, same query, India vs USA (different results):
+  GET /search?q=cricket&count=5&setlang=en-IN&cc=IN
+  GET /search?q=cricket&count=5&setlang=en-US&cc=US
+
+================================================================
+SECTION C - PAGINATION
+================================================================
+
+- `page`: page number 1, 2, 3, and so on. Default 1. It sets
+  offset = (page-1) x count, and the header line shows the page when
+  it is above 1, e.g. `Search: bitcoin (web, 5 results, page 2)`.
+- IMPORTANT (verified 2026-11-19, tested 7 ways): pagination does NOT
+  work for Bing web/news from a programmatic fetch. Bing ignores the
+  `first` offset in every form tested: RSS `first`, HTML `first`,
+  `FORM=PERE`, the `FPIG` session token, cookies, cookies+FPIG+FORM
+  together, and `count=50`. Every one returns the same top 10 results.
+  Bing only paginates for a real browser session. So page=2 returns
+  the IDENTICAL results as page=1, in the same order. Do not call
+  page=2 expecting more web/news results — it gives the same list again.
+- For images/videos, pagination works better because Bing HTML returns
+  more results and respects the offset.
+- To get more web/news results for one query, use different filters
+  instead (change the country, the language, or add a time filter) —
+  those return genuinely different result sets.
+
+================================================================
+SECTION D - COUNTRY-WISE (get different results per country)
+================================================================
+
+- Bing lets you change the country and language to get different,
+  region-specific results for the same query. Change these three together:
+- `cc` (also `region` or `country`): country code, e.g. IN, US, GB, DE, JP.
+  Default: derived from setlang.
+- `setlang` or `lang`: UI language, e.g. en-US, en-IN, hi-IN, es-ES, de-DE.
+  Default en-US.
+- `mkt`: market, e.g. en-IN, en-US. Default: same as setlang.
+- VERIFIED 2026-11-19: the same query `cricket` with setlang=en-IN&cc=IN
+  gives India-focused results (Cricinfo, Cricbuzz/IPL 2026, CREX),
+  while setlang=en-US&cc=US gives US-focused results (Cricket
+  Wireless, the mobile carrier, on top). Only 3 of 5 results overlap.
+  Country-wise filtering works and gives genuinely different results
+  per country.
+
+================================================================
+SECTION E - RESULT COUNTS (verified)
+================================================================
+
+- Web/news, count=10: 10 results. count=50: still 10 — Bing RSS gives
+  at most 10 per query, so a larger count has no effect on web/news.
+- Images, count=5: 5 results (verified with a cats search).
+- The `page` parameter does not increase the web/news total: page=2
+  returns the same 10 (or 5) results as page=1.
+
+================================================================
+SECTION F - BEHAVIOUR AND LIMITS
+================================================================
+
+- Fetches Bing from Cloudflare's network. Typical response 100-700ms.
+  Verified 30/30 Bing searches at 15 per minute, 28/30 with results,
+  about 440ms average.
+- Web and news use Bing HTML search (not RSS), parsed from the result
+  `<h2>` links. Bing redirect URLs are decoded (the `u` param is
+  base64 with an `a1` prefix) to clean destination URLs. RSS is kept
+  as a fallback if HTML parsing returns nothing. Images and videos
+  parse Bing's HTML embedded JSON; if Bing changes its page markup
+  those two verticals can return fewer results.
+- The Worker sets a 20 second fetch timeout to Bing. A slow or failed
+  upstream returns a header plus "Error: upstream_failed" (or
+  "upstream_403" etc.) and no result lines.
+- Free tier Worker: about 30 seconds max per request. No rate limit is
+  set on the Worker itself; Bing may throttle very aggressive use.
+- Results are not cached (Cache-Control: no-store). Every call fetches
+  fresh.
+- CORS is open (Access-Control-Allow-Origin: *), so browser and agent
+  clients can call it directly.
+- Errors: missing/invalid `q` → HTTP 400. Upstream failure → header +
+  `Error: upstream_failed` (or upstream_403 etc.), HTTP 200 with no
+  result lines. Unknown path → HTTP 404 `not found: use /search?q=...`.
+
+================================================================
+SECTION G - WHAT IT IS NOT
+================================================================
+
+- It is not a general web proxy. It only searches Bing (/search).
+- It does not fetch page content, only search result listings
+  (title + URL). Fetch the page yourself for content.
+- Google News does NOT work from Cloudflare's network. A /gnews
+  endpoint was built and then removed 2026-11-19: Google News RSS
+  returns 503 to Cloudflare egress IPs (it works from a normal VM
+  directly). Bing News via /search vertical=news is the working news
+  source.
+- DuckDuckGo does NOT work from Cloudflare's network. Tested twice
+  2026-11-19: first via the vault Worker (lite, html and main
+  endpoints all returned upstream_failed after about 20 seconds each),
+  then via a live /ddg endpoint built into this Worker
+  (html.duckduckgo.com returned HTTP 202, a bot-challenge page, 0
+  results). The endpoint was removed. GitHub repos that scrape
+  DuckDuckGo from Workers exist, but from this Worker's Cloudflare IPs
+  DuckDuckGo serves a bot-challenge, not results. It may work
+  intermittently or from other IPs; it does not work here.
+- Google and SearxNG also fail from the Worker. Bing is the only
+  working search source here.
+
+================================================================
+SECTION H - AGENT COOKBOOK (copy-paste)
+================================================================
+
+H1. Fastest web answer: GET /search?q=<terms>&count=10
+H2. News for the past day: GET /search?q=<terms>&vertical=news&time=day&sort=date
+H3. Same query, two countries: GET /search?q=<terms>&setlang=en-IN&cc=IN
+    then GET /search?q=<terms>&setlang=en-US&cc=US — merge, dedupe.
+H4. Images for a mood board: GET /search?q=<terms>&vertical=images&size=large&count=20
+H5. Videos, short and HD: GET /search?q=<terms>&vertical=videos&duration=short&resolution=hd
+H6. Combine with another engine: run TinyFish and this Worker on the
+    same query, merge the URLs, dedupe, then fetch the top pages.
+    That is what web.py `research` does (see the muse-pi-setup repo).
+H7. When /search returns an error line, retry once after a few seconds.
+    If it fails again, use the other engine — do not retry-loop.
+H8. When you need more than 10 web results, do NOT call page=2 (same
+    results). Change the country, language, or time filter instead.
+
+================================================================
+SECTION I - DEPLOY YOUR OWN
+================================================================
+
+The Worker needs no secrets, no KV, no D1 — it is a plain
+fetch-and-parse bridge. Deploy it with your own Cloudflare account:
+
+  1. Create a Worker in the Cloudflare dashboard (or `npx wrangler deploy`
+     from the cf-search-worker/ source in the muse-pi-setup repo).
+  2. Paste src/index.js, deploy. No environment variables needed.
+  3. Your URL is https://<your-worker>.<your-subdomain>.workers.dev
+  4. Set CF_SEARCH_URL to your URL (env export) so web.py uses it.
+  5. Test: GET /health → "ok cf-search web images videos news"
+     GET /search?q=bitcoin&count=3 → 3 results, plain text.
+
+The Worker URL is NEVER hardcoded in web.py or the skill. Muse ASKS
+the user for their Worker URL during setup and sets CF_SEARCH_URL.
