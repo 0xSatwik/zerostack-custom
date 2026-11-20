@@ -1,96 +1,178 @@
-# Install — zerostack custom build
+# INSTALL — set up the Zerostack system on a fresh account
 
-Private fork of [zerostack](https://github.com/gi-dellav/zerostack) (1.8.6, GPL-3.0) with our search, vault, gateway, skills and config. Additive-only: everything upstream ships stays, except the search (see FEATURES.md).
+This guide is for another Muse (or a human) setting up this whole system
+from scratch on a fresh account. It is the same setup that is live at
+`https://hardeepwalia.pitunnel.dpdns.org/pi` — Zerostack + Rust gateway +
+chat/admin/settings pages + recall + vault + Instabox browser.
 
-## 1. Install the binary
+Read `AGENTS.md` in this repo first. It is the operating manual and holds
+the lessons that will save you hours (Cloudflare 403 = egress blocked,
+tunnel hostname must be proxied, Playwright MCP pin, `pkill -f` kills
+your own SSH session, and more).
 
-The release binary is the supported path (no cargo on the target box):
+## What you need before you start
 
-```sh
-# from the zerostack releases (install.sh) — installs 1.8.6 to ~/.local/bin/zerostack
-curl -fsSL https://github.com/gi-dellav/zerostack/releases/download/v1.8.6/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"   # add to ~/.profile and ~/.bashrc
-zerostack --version                     # 1.8.6
+| Thing | Where | Notes |
+|---|---|---|
+| Altare account | altare.gg | Free pool: 6 GiB / 150% CPU / 10 GiB disk. Create a sandbox (Ubuntu 24.04). |
+| Cloudflare account | dash.cloudflare.com | For the Tunnel + the vault Worker + D1. Free tier is enough. |
+| A domain (or subdomain) | any registrar | Must be a zone in the SAME Cloudflare account as the tunnel. A `dpdns.org` subdomain works (free, in the PSL). |
+| Provider API keys | your model providers | At least one OpenAI-compatible provider (e.g. 100milionseek, tokenlab, moss, howtofix, xingchi). The keys go in the box only, never in chat or in GitHub. |
+| Instabox account (optional) | instabox.sh | Only if you want the browser. Free VM: 4 vCPU / 8 GiB / 20 GiB. |
+| Tailscale account (optional) | login.tailscale.com | Only if the browser runs on a different box than the agent. |
+
+## Step 0 — the sandbox
+
+1. Create an Altare sandbox (Ubuntu 24.04). Note its SSH endpoint
+   (host + port) and its server id.
+2. SSH in as root. Confirm you are root (`id -u` → `0`).
+3. Enable Direct network protocols in the Muse app if you are Muse
+   (Outbound SSH, etc.) — otherwise SSH from the Muse VM is blocked.
+
+## Step 1 — run the installer
+
+On the sandbox, as root:
+
+```
+curl -fsSL https://raw.githubusercontent.com/0xSatwik/muse-pi-setup/main/install.sh -o install.sh
+bash install.sh
 ```
 
-Building from this source instead: follow upstream's AGENTS.md — never `cargo build`, no `--release` during development, `cargo test` instead of `cargo check`, always `cargo fmt`, install with `cargo install --path . --debug`. Note the running binary has its prompts baked in: editing `data/prompts/` only affects a rebuild.
+What it does (all automatic): system packages, Node 24, Rust 1.100.0,
+cloudflared, the Zerostack 1.8.6 binary, the Rust gateway built from
+source, the chat (`/pi`), admin (`/admin`) and settings (`/pi/settings`)
+pages, the Zerostack config with placeholders, the recall system, and
+the tmux supervisor sessions (`zs-gateway`, `recall-auto`). It prints
+a manual checklist at the end.
 
-## 2. Configure providers and models
+Verify: `curl -s http://127.0.0.1:8766/health` should return
+`{"backend":"zerostack","impl":"rust","ok":true,...}`.
 
-Copy the template and fill in your own keys (never commit real keys):
+If the gateway is not responding: `tmux attach -t zs-gateway` to see
+its log. The supervisor respawns it ~2s after an exit. Editing
+`zs-supervise.sh` on disk does NOT change the running loop — kill and
+recreate the tmux session.
 
-```sh
-mkdir -p ~/.config/zerostack
-cp config/config.toml.example ~/.config/zerostack/config.toml
-chmod 600 ~/.config/zerostack/config.toml
-```
+## Step 2 — provider keys + models
 
-The template carries six OpenAI-compatible providers (100milionseek default, xingchi, tokenlab, moss, howtofix) with `max_tokens=65536` and `context_window=197488`. Each provider reads its key from an env var (`HMS_API_KEY`, `XINGCHI_API_KEY`, `TOKENLAB_API_KEY`, `MOSS_API_KEY`, `HOWTOFIX_API_KEY`). Export them from `~/.profile` (and `~/.bashrc`) — the gateway and the ask-route watcher read keys from there, not from the gateway store.
+1. Add your provider API keys to `/root/pi-bridge/provider-keys.env`
+   (chmod 600). Format: `HMS_API_KEY=...` (one per line). Also
+   `MOSS_API_KEY` / `TOKENLAB_API_KEY` can go in `/root/.profile`.
+   Never put a key in chat, in a browser task, or in GitHub.
+2. Open `/admin` (once the tunnel is up, Step 4) and add the models:
+   Add provider → Load models (uses the stored key server-side) → tick
+   the models to add → set one default → reorder the rest for fallback.
+   Or edit `/root/pi-bridge/models.json` directly and restart the gateway.
+3. Restart the gateway: kill its PID (supervisor respawns it). Never
+   `pkill -f "zs-gateway"` — it kills both the Rust and Python binaries;
+   kill by PID.
 
-Known provider notes:
-- **xingchi** returns 403 `client_not_allowed` in zerostack — the provider only admits named coding clients (Codex, Claude Code, Cursor, pi). The `api_style = "responses"` setting does not fix it.
-- **100milionseek** has returned 502/503/524 intermittently; **tokenlab** is the healthy fallback. Switch a live session's model with `POST /sessions/<id>/model`.
-- **tokenlab** can 429 "at capacity" (transient concurrency limit) — retry later.
+## Step 3 — the vault (Cloudflare Worker + D1)
 
-## 3. Vault (API keys without ever seeing them)
+The vault lets any agent use API keys without ever seeing them. The
+code is public with a full guide:
 
-The vault is a Cloudflare Worker + D1 MCP server. Zerostack connects to it as an MCP server (URL-based `mcp_servers.vault` in the config). Two rules:
+- Repo: https://github.com/0xSatwik/cf-d1-vault (README carries the
+  whole connecting system, all code written in it).
 
-- **MCP headers do NOT expand env vars** in zerostack (`expand_env` is provider-only). The live config must hold the literal vault agent token, substituted at deploy time from `$VAULT_AGENT_TOKEN`. The template and this repo keep the `${VAULT_AGENT_TOKEN}` placeholder — never a real token.
-- **Vault tools do NOT work through the gateway** (MCP is disabled in ACP mode). They work in the Zerostack terminal (TUI) only. A vault tool call returns `unlock_required` until Muse unlocks the agent for that service (2-hour window, per service).
+Deploy it to YOUR Cloudflare account (Worker + D1), note the Worker URL
+and the master secret. Keep the master secret in your Secure Vault —
+never in chat, never in GitHub. Then put the Worker URL + a request-only
+agent token in the Zerostack config `[mcp_servers.vault]` (literal
+token — Zerostack does NOT expand `${ENV}` in MCP headers). The vault
+MCP works in the Zerostack terminal (TUI) only; ACP (the /pi chat)
+never loads MCP servers. To use the vault, ask Muse to unlock it for a
+service, then use the Zerostack terminal.
 
-Register an agent (`zerostack-altare` is the live one), save its request-only token first, then deploy the config with the literal token in place.
+## Step 4 — tunnel + public URL
 
-## 4. Search (ours only — no Exa)
+1. In your Cloudflare account, create a named tunnel (e.g.
+   `zerostack`) and a DNS record for it. The hostname MUST be proxied
+   (orange cloud) — DNS-only gives `ERR_CONNECTION_RESET`.
+2. The CNAME must point at `<tunnel-uuid>.cfargotunnel.com` and the
+   domain must be a zone in the SAME Cloudflare account as the tunnel.
+3. Tunnel config ingress: everything else → `127.0.0.1:8766`. If you
+   use the browser, add `/browser*` → `127.0.0.1:6081` and
+   `/browser-vnc*` → `127.0.0.1:6080`. cloudflared forwards the FULL
+   path — backends must serve the prefixed path.
+4. If the host is overloaded (load avg > 50, tunnel 502s), set
+   `protocol: http2` in the tunnel config (QUIC drops under load).
+5. Start it in tmux: `tmux new-session -d -s pi-tunnel 'cloudflared tunnel --config /root/.cloudflared/config.yml run'`.
+   Never restart cloudflared inside its tmux session — a tmux session
+   closes when its main process exits.
+6. Verify with a fresh browser load of `https://<your-domain>/pi`
+   (not a search fetch — that can serve a cached copy for minutes).
 
-Exa is off: `enable-exa-mcp` is a **top-level** config field (put it at the top of the TOML, not inside `[mcp_servers.vault]`, or it stays on). The nine bundled prompt files in `data/prompts/` have the Exa instruction removed and replaced with one line: use `search/web.py research` — one combined call (Monid/TinyFish + Bing + X), cite source URLs.
+## Step 5 — opening password
 
-`search/web.py` needs a Monid key (`MONID_API_KEY`). Set it as an env export; never write the key literally in a file. The Bing leg goes through the `workers/cf-search` Worker (deploy it separately, see its README); the X leg uses the FxEmbed mirrors in `workers/x-fxembed/README.md` (a User-Agent header is mandatory or FxEmbed 401s). DuckDuckGo is removed from the system everywhere.
+Open `/admin`, log in with the gateway token (in
+`/root/pi-bridge/gateway.env`, 43 chars — paste it in the password
+field), then use the "Set password" card to choose an opening password.
+You must choose it; never let anyone invent one. If you forget it, log
+in with the gateway token and reset it from the same card.
 
-## 5. Gateway + web chat (`bridge/`)
+## Step 6 — browser (optional, Instabox)
 
-`bridge/zs-gateway.py` is a stdlib HTTP gateway (port **8766**) speaking ACP to one zerostack process per session (ports 7300–7399). `bridge/zs.html` is the chat page (Pi | Zerostack switcher), `bridge/zs-supervise.sh` respawns the gateway, `bridge/zs.py` is the gateway client used by the file-queue bridge.
+1. Create an Instabox machine (agent-browser template, Debian 13).
+   Note its id. It auto-pauses after 30 min idle; resume it with the
+   Instabox API when you need it.
+2. SSH in (token as username, port 2222). Install Camoufox and
+   Playwright MCP **pinned to `@playwright/mcp@0.0.78`** (0.0.86 is
+   rejected by Camoufox's Playwright 1.62.0 with a 428 version
+   mismatch). Camoufox's ws binds IPv6 `[::1]` only — never use
+   `127.0.0.1` for it.
+3. Start the Playwright MCP on `0.0.0.0:8931` and the viewer
+   (noVNC on 6080, control page on 6081). Start long-running servers
+   with `setsid nohup ... & disown` — plain nohup dies when SSH closes.
+   Kill Playwright MCP by port PID, never `pkill -f` inside an SSH
+   command (it kills your own session).
+4. Password-protect the browser control page with the gateway token.
+5. If the browser is on a different box than the agent, connect both
+   to the same Tailscale tailnet and use the SOCKS5 relay pattern from
+   `AGENTS.md` (Altare has no `/dev/net/tun`, so normal processes
+   cannot dial Tailscale IPs — go through the relay on localhost).
 
-```sh
-# run the gateway in tmux (a tmux session closes when its main process exits — kill then recreate)
-tmux kill-session -t zs-gateway
-tmux new -s zs-gateway -d '/root/pi-bridge/zs-supervise.sh'
-```
+## Step 7 — verify everything
 
-Login is the gateway token (43 chars, in `gateway.env` as `PI_GATEWAY_TOKEN`) pasted into the password field — no opening password exists unless you set `PI_ADMIN_PASS_SHA256`. Point your tunnel at port 8766 to serve the page at `/pi`. Rollback is repointing the tunnel at the Pi gateway (8765).
+- `/pi` loads, you log in, and "Say OK" returns "OK".
+- `/admin` loads and shows your providers/models.
+- `/pi/settings` loads and shows the Zerostack version, the skills,
+  and the MCP servers (browser + vault, noted TUI-only).
+- The recall index has your sessions: `grep . /root/work/recall/index.jsonl`.
+- The auto-updater is running: `tmux ls` shows `recall-auto`.
+- A web research query works (TinyFish + Bing + X via the combined
+  search system — never paid Monid endpoints).
+- The vault is locked until Muse unlocks it for a service.
 
-Gateway behaviour to know:
-- ACP registers only `initialize`, `session/new`, `session/prompt` — no cancel (stop kills the process), no load/list/resume/set_model. Sessions die with their process; the gateway owns transcripts and replays a text digest after respawn. Idle sessions release their process after 15 minutes.
-- `/prompt` returns `accepted: true`; streaming arrives on `/events`.
-- `/stats` reports CPU/RAM/disk against the plan quota.
+## Troubleshooting
 
-## 6. Skills (`skills/`)
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `/pi` 502 | Altare host overloaded (load avg > 50) | Tunnel `protocol: http2`; wait for the host to recover; it self-heals on reconnect. |
+| `ERR_CONNECTION_RESET` on the tunnel URL | DNS record is DNS-only, not proxied | Set the CNAME to proxied (orange cloud). |
+| Cloudflare 403 on a site | The VM's egress is blocked, not your key | Use the ladder in AGENTS.md (search fetch → browser task → vault Worker → other egress). |
+| Load models shows nothing | You clicked it from the Providers pane | The tick panel lives in the Models pane; the button now switches to it first. |
+| Admin login "not happening" | Wrong password fell through to a token attempt | The login now shows the real error. Use the gateway token, then reset the password. |
+| Zerostack session dies empty | Provider 502/429 (100milionseek, tokenlab) | Provider fault, not integration. Retry or switch model. |
+| `cargo: command not found` in SSH | rustup bin not on PATH | `export PATH="$HOME/.cargo/bin:$PATH"`. |
+| SSH "Host key verification failed" | `/root/.ssh/known_hosts` wiped on VM replacement | Use the durable copy: `-o UserKnownHostsFile=/home/hatch/.ssh/known_hosts`. |
 
-Zerostack has **no skills directory**; prompts are the only mechanism. Install the four skills as prompts:
+## What lives where
 
-```sh
-python3 skills/install-skills.py
-```
+| Piece | On the box | In GitHub |
+|---|---|---|
+| Zerostack binary | `/root/.local/bin/zerostack` | gi-dellav/zerostack (release) |
+| Zerostack config | `/root/.config/zerostack/config.toml` | `zerostack-config.toml` (template, placeholders) |
+| Rust gateway | `/root/pi-bridge/zs-gateway` | `bridge/zs-gateway-rs/` |
+| Chat/Admin/Settings pages | served from the gateway binary | `bridge/zs.html` (+ `admin.html`, `settings.html` in the crate) |
+| Recall system | `/root/work/recall/` | `recall/` |
+| Install script | — | `install.sh` (top level) |
+| Vault Worker + D1 | Cloudflare (your account) | 0xSatwik/cf-d1-vault (public) |
+| Secrets (keys, tokens, master) | the box only, chmod 600 | NEVER in GitHub |
 
-This places them in the prompts directory (`~/.local/share/zerostack/prompts/`). The four: `web-research` (our combined search), `pi-delegation` (rewritten to delegate to Zerostack), `hallmark` (full bundle beside the prompts dir), `resilient-batch-jobs` (checkpointed batch runs). Each was tested on a real task — see FEATURES.md.
+## Updating
 
-## 7. Memory
-
-Zerostack's built-in memory (plain-Markdown, auto-injected): a global `MEMORY.md` plus per-project daily logs, scratchpad and notes. The Pi memory was migrated once (`notes/pi-lessons.md`, `notes/pi-altare-facts.md`, `SCRATCHPAD.md`); Pi's SQLite store stays in Pi and is untouched. Find the exact layout in `src/extras/memory/mod.rs` before moving anything else.
-
-## 8. Browser / heavy tasks (optional, separate box)
-
-The agent box does not run the browser. Browser and heavy tasks go on a second, on-demand box (Instabox) with Tailscale + a Playwright/Chromium MCP server bound to Tailscale only, added to zerostack's MCP config by Tailscale address. That box is not part of this repo.
-
-## 9. Verify
-
-```sh
-zerostack -p --name smoke-test "Say OK"          # expect: OK
-zerostack -c -p "What did I just ask you to say?" # expect: OK. (session resume)
-python3 search/web.py research "zerostack"         # expect: real results + sources
-curl -s http://127.0.0.1:8766/stats | head -c 200    # expect: 200, disk vs plan quota
-```
-
-## Secrets
-
-Never commit keys, tokens, passwords, Worker URLs or account IDs. Config templates keep `${ENV}` placeholders only. The repo is private, but the sweep runs before every push.
+Re-running `install.sh` is safe (idempotent) — it reinstalls code and
+rebuilds the gateway but does not overwrite your keys or config
+secrets. After any system update, sync the repos (the setup repo and
+the private custom repo) so the next install gets the latest code.
