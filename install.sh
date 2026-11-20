@@ -194,6 +194,14 @@ if [ -f "$WORK/recall/auto_digest.py" ]; then
   tmux new-session -d -s recall-auto "while true; do python3 $WORK/recall/auto_digest.py >> $WORK/recall/auto_digest.log 2>&1; sleep 21600; done"
 fi
 
+# --- 13. cleanup (so the install itself leaves no junk) ---
+# Removes the installer's temp files + package caches. The full cleanup
+# (which also removes Pi leftovers, eval deps, vault node_modules) is
+# cleanup.sh in this repo — run it any time disk feels high.
+say "cleanup install leftovers"
+rm -f /tmp/*.tar.gz /tmp/*.tgz /tmp/*.deb 2>/dev/null || true
+if command -v npm >/dev/null 2>&1; then npm cache clean --force >/dev/null 2>&1 || true; fi
+
 say "gateway health"
 sleep 2
 curl -s -m 5 http://127.0.0.1:8766/health || warn "gateway not responding yet — check: tmux attach -t zs-gateway"
