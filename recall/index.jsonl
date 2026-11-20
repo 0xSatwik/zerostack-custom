@@ -1,0 +1,7 @@
+{"id":"5d1d7b2d","name":"setup-repo","model":"tokenlab/DeepSeek-V4.1-Flash","msgs":2,"updated":"2026-11-20","topics":["repo","muse-pi-setup","zerostack-custom"],"sum":"Setup-repo session; repo sync and setup work."}
+{"id":"5f7642a3","name":"model-system","model":"100milionseek/deepseek-v4.1-flash-free","msgs":102,"updated":"2026-11-21","topics":["rust-gateway","admin","model-system","ide","fallback"],"sum":"Rust gateway + Admin model system; per-provider Load models + Add key; fallback order; auto-naming."}
+{"id":"6b00a4ae","name":"whats going on ?","model":"moss/nex-n2.6","msgs":11,"updated":"2026-11-21","topics":["test","gateway"],"sum":"Test session; gateway check."}
+{"id":"8012a3a7","name":"vault","model":"tokenlab/DeepSeek-V4.1-Flash","msgs":2,"updated":"2026-11-20","topics":["vault","cloudflare","keys"],"sum":"Vault session; Cloudflare vault MCP work."}
+{"id":"a07f783b","name":"browser-test","model":"","msgs":39,"updated":"2026-11-20","topics":["browser","instabox","camoufox","playwright"],"sum":"Browser test session; Instabox Camoufox + Playwright MCP verification."}
+{"id":"aab71315","name":"browser-test-tl","model":"tokenlab/DeepSeek-V4.1-Flash","msgs":8,"updated":"2026-11-20","topics":["browser","instabox","test"],"sum":"Browser test session (tokenlab); Instabox browser check."}
+{"id":"f685b22e","name":"general-work","model":"tokenlab/DeepSeek-V4.1-Flash","msgs":46,"updated":"2026-11-21","topics":["general","zerostack","bridge"],"sum":"General-work session; Zerostack bridge and misc work."}
