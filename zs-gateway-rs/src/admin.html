@@ -891,6 +891,9 @@ document.addEventListener("click", async e => {
 let PROV_TICKED = [];
 let PROV_TICK_PROVIDER = "";
 async function loadProvModels(name){
+  // The tick panel lives in the Models pane only — switch there first, or
+  // the user clicks Load models in the Providers pane and sees nothing.
+  show("models");
   const wrap = $("provTickWrap");
   const label = $("provTickLabel");
   if (label) label.textContent = "Loading " + name + "…";
