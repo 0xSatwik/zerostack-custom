@@ -1,0 +1,229 @@
+# FxEmbed worker - complete LLM guide (llms.txt)
+
+THIS FILE IS THE MANUAL. An AI agent that reads this file knows everything needed to use this worker.
+
+Base URL of THIS deployment: https://fixtweet.twapiworker.workers.dev
+Live copies of this guide: https://fixtweet.twapiworker.workers.dev/llms.txt  https://fixtweet.twapiworker.workers.dev/llm.txt  https://fixtweet.twapiworker.workers.dev/ai/llms.txt (all identical, this file self-fills the base URL)
+Machine-readable route lists (OpenAPI 3.0 JSON): https://fixtweet.twapiworker.workers.dev/api/2/openapi.json  https://fixtweet.twapiworker.workers.dev/blueskyapi/2/openapi.json  https://fixtweet.twapiworker.workers.dev/atmosphere/2/openapi.json  https://fixtweet.twapiworker.workers.dev/ai/2/openapi.json
+Test console (human UI trying every endpoint): https://fxembed-console.pages.dev
+
+WHAT THIS IS: FxEmbed turns social-media posts into rich chat embeds plus JSON APIs. No signup, no API key. Every example below uses BASE = https://fixtweet.twapiworker.workers.dev and a User-Agent header: curl -H "User-Agent: MyAgent/1.0" "BASE<path>".
+NETWORKS: X/Twitter, Bluesky, TikTok, Instagram, Threads, ANY Mastodon/ActivityPub instance.
+NOT SUPPORTED: Reddit, Facebook, YouTube, TikTok comments/likers/follow-lists/keyword-search/trends (ByteDance signs those APIs; only public server-rendered pages are readable).
+
+LAST UPDATED: 2026-11-16
+CHANGELOG (2026-11-16): search relay roots are now kareem + mie only (20-instance census; nitterts removed - K18); quotes run Latest+Top in parallel with a combined cursor and public-host fallback (C7); conversation falls back to the public API host, effectively page-1 (C3); a public-host safety net now answers trends, typeahead, about, followers, following, reposts and articles when the local guest flow fails (K19); a second identical worker base (fixtweet-2) is live - see TWO BASES below; all known issues are collected in Section N.
+
+================================================================
+FOR AI AGENTS - START HERE (this deployment)
+================================================================
+
+This one URL (https://fixtweet.twapiworker.workers.dev/llms.txt) is the whole manual. Everything an agent needs to use this worker is in this file - no other doc is required.
+THE 3 CORE RECIPES:
+  1. Single post: GET https://fixtweet.twapiworker.workers.dev/api/2/status/{id} where {id} is the numeric id from x.com/.../status/{id}.
+  2. Deep keyword search: GET https://fixtweet.twapiworker.workers.dev/api/2/search?q=<terms>&feed=latest&count=50&fast=1, then follow cursor.bottom from each response (pass it back as &cursor=<value>) and repeat until the walk ends. The continuation token is ALWAYS cursor.bottom - never any other key.
+  3. One-shot pack: GET https://fixtweet.twapiworker.workers.dev/ai/2/ask?q=<terms>&pages=N (N max 8) - the worker walks N search pages server-side and returns ONE merged Markdown pack.
+A descriptive User-Agent header is MANDATORY on every /api and /ai call (e.g. curl -H "User-Agent: MyAgent/1.0"); a missing User-Agent = HTTP 401.
+
+================================================================
+TWO BASES - IDENTICAL CLONES (use either; added 2026-11-16)
+================================================================
+
+This deployment is served from TWO base URLs running the exact same worker bundle (byte-identical; Cloudflare reports the same etag for both scripts):
+  https://fixtweet.twapiworker.workers.dev
+  https://fixtweet-2.twapiworker.workers.dev
+Every rule, endpoint and limit in this guide applies identically to both (this file self-fills whichever base you fetched it from). Use either as BASE. Guest answers can flake per request and per base - a 404 from one attempt does not mean a post is gone: on a flaky empty/404, retry once, or fail over to the other base.
+
+================================================================
+SECTION A - HOW TO CALL (rules every agent must follow)
+================================================================
+
+A1. REALM PREFIXES. On *.workers.dev (this host) each realm needs its path prefix. On custom domains each realm drops its prefix.
+  /api/...         FxTwitter JSON API v2 (17 OpenAPI paths) + legacy v1
+  /twitter/...     tweet/profile embed pages, RSS/Atom feeds, ActivityPub, oEmbed
+  /blueskyapi/...  FxBluesky JSON API v2 (15 OpenAPI paths)
+  /bluesky/...     Bluesky post embeds, feeds, oEmbed
+  /tiktok/...      TikTok pages, /api/, /raw/, /proxy, oEmbed
+  /instagram/...   /p/, /reel/, /api/, oEmbed
+  /atmosphere/...  multi-provider JSON: Mastodon, TikTok, Instagram, Threads (+ forwards)
+  /ai/...          Markdown twins of the JSON APIs (Section B). Content-Type: text/markdown.
+
+A2. USER-AGENT IS MANDATORY for /api, /blueskyapi, /atmosphere and /ai. Any descriptive value works; missing UA = HTTP 401 JSON {"error":"You must identify yourself..."}. Browsers send theirs automatically. WARNING: bare library defaults like Python-urllib/3.11 may be challenged at the edge with 403 - always set a real app UA string.
+
+A3. EMBED HTML NEEDS A BOT UA (Discordbot/2.0, Telegrambot, facebookexternalhit, WhatsApp...). With a browser UA, embed routes answer 302 redirect to the original site instead of HTML. JSON APIs accept any UA.
+
+A4. PAGINATION. List endpoints return {"code":200,"results":[...],"cursor":{"top":"...","bottom":"..."}}. Recipe: GET /api/2/profile/X/statuses?count=5 -> read cursor.bottom -> GET same path + ?cursor=BOTTOM (repeat; keep other params). Cursors are opaque - never build them yourself. count range is 1-100 (default 20, search default 30).
+
+A5. POLLING WITH ?since=. Timelines accept ?since=<unix SECONDS>. If nothing is newer the worker answers HTTP 204 with an empty body (cheapest possible poll). Else it returns the timeline and you filter client-side. Ideal loop: statuses?count=5&since=<last_seen> every N minutes; RSS feeds (Section D) are the alternative.
+
+A6. ?lang=xx (ISO 639-1/BCP 47, e.g. ?lang=es) - KNOWN ISSUE (2026-11-16): the parameter is ACCEPTED on status/thread/conversation/statuses/search/quotes, but translation is currently a NO-OP on this deployment: text comes back in the original language, with no marker that translation did not happen. Do not rely on ?lang= for translated text here (see Section N).
+
+A7. ERRORS are envelopes {"code":N,"message":"..."} AND the same N as HTTP status. 404 envelope = valid answer meaning "upstream has nothing" (empty search, unknown id, deleted post). 8 X routes need a credential pool THIS worker lacks (list in K7) - since 2026-11-16 most of them fall back to the public API host automatically (K19); what still fails outright is listed in Section N. SEARCH WALK ERROR SEMANTICS: an HTTP 500 during a search walk means the search relay is temporarily unavailable - it is RETRYABLE and does NOT mean the results ended: wait ~30s and retry the SAME request (same cursor); the walk resumes at the failed window and no results are skipped. An HTTP 404 is the only true end of a search walk - genuinely exhausted, or nothing exists for that query.
+
+A8. CONTENT TYPES. JSON APIs: application/json. /ai: text/markdown. Embeds: text/html. Feeds: application/rss+xml / atom+xml. oEmbed: application/json. robots/version: text. CORS: Access-Control-Allow-Origin: * on JSON + AI + embed realms, so browser apps can call directly.
+
+A9. RATE / FRESHNESS REALITY. Success responses are edge-cached: single posts/profiles ~30 days, threads/timelines/conversations ~7 days, oEmbed ~1 day; feed=latest SEARCH results are cached only ~90 seconds (latest search is the freshness surface); cache is purged when a post goes private/deleted. So: single-post endpoints can serve stale stats; always poll TIMELINES with ?since= for freshness. TikTok: a handful of unsigned requests per IP, then a long 429 cooldown (expect 404 flaps - space out calls).
+
+================================================================
+SECTION B - /ai MARKDOWN API (LLM-first twins, start here for AI work)
+================================================================
+
+Same data as JSON, rendered as stable token-lean Markdown. Layout contract:
+  "# Post" then "**Author Name** · date · [open](url)" then blockquoted FULL text (never truncated),
+  then "Stats: 12K likes · 3K reposts · ..." (only nonzero), then "Media: ![photo](url) | [video 12s](url)",
+  then optional "Replying to: ...", "Link card: ...", "Community note: ...".
+  Threads render "## 1/N, 2/N..." sections. Profiles render "**Name** — N followers · ..." + bio lines + [open profile]. Lists render numbered one-liners + a copy-paste "Next: `/ai/...?cursor=...`" line when more pages exist. Errors render "# Error" + upstream code + 3 fix tips. No UA = 401 markdown doc. All JSON query params (count/cursor/lang/ranking_mode/...) work identically.
+REAL EXAMPLE (GET /ai/2/status/20):
+  # Post
+  **jack** · Tue Mar 21 20:50:14 +0000 2006 · [open](https://x.com/jack/status/20)
+  > just setting up my twttr
+  Stats: 311K likes · 124.7K reposts · 18.1K replies · 7.2K quotes · 21.8K bookmarks
+
+B1. X endpoints. /ai/2/status/{tweet-id} | /ai/2/thread/{tweet-id} (whole author thread) | /ai/2/conversation/{tweet-id} (+?ranking_mode=likes|recency) | /ai/2/profile/{handle-or-id:123} | /ai/2/profile/{handle}/statuses (+?count&cursor&with_replies&lang) | /ai/2/profile/{handle}/search?q= | /ai/2/profile/{handle}/media | /ai/2/status/{id}/quotes | /ai/2/search?q=&feed=latest|top|media | /ai/2/trends
+
+B2. Bluesky endpoints. /ai/2/bsky/profile/{handle-or-DID} | /ai/2/bsky/profile/{handle}/statuses | /ai/2/bsky/status/{handle}/{rkey} | /ai/2/bsky/thread/{handle}/{rkey} | /ai/2/bsky/search?q=. NO RKEY? Three-step recipe: 1) GET /ai/2/bsky/profile/bsky.app/statuses?count=1 2) copy .../post/{rkey} from the [open] link 3) GET /ai/2/bsky/status/bsky.app/{rkey}.
+
+B3. Other networks. /ai/2/tiktok/status/{numeric-video-id} | /ai/2/tiktok/profile/{handle-without-@} | /ai/2/instagram/profile/{username} | /ai/2/threads/profile/{username} | /ai/2/mastodon/{instance-domain}/profile/{handle}
+
+B4. UNIVERSAL - /ai/2/post?url=. Paste ANY supported post/profile URL, get Markdown. ONE endpoint for everything. Recognized shapes:
+  x.com|twitter.com/{handle}/status/{id} -> X post        | x.com|twitter.com/{handle} -> X profile
+  bsky.app/profile/{handle}/post/{rkey} -> Bsky post      | bsky.app/profile/{handle} -> Bsky profile
+  tiktok.com/.../video/{numeric-id} -> TikTok video       | tiktok.com/@{handle} -> TikTok profile
+  instagram.com/p|reel|reels/{shortcode} -> IG post       | instagram.com/{username} -> IG profile
+  threads.com|threads.net/@{user}/post/{id} -> Threads post | threads.com|threads.net/@{user} -> Threads profile
+  {mastodon-host}/@{handle}/{id} | /users/{handle}/statuses/{id} | /notice/{id} -> Mastodon post
+  {mastodon-host}/@{handle} | /users/{handle} -> Mastodon profile
+  Anything else -> HTTP 400 markdown explaining supported shapes. Missing ?url= -> HTTP 400.
+  EXAMPLES: /ai/2/post?url=https://x.com/X/status/20 | ?url=https://bsky.app/profile/bsky.app | ?url=https://mastodon.social/@Gargron | ?url=https://www.threads.com/@zuck
+
+B5. Meta. /ai/ (index of all AI routes) /ai/version /ai/robots.txt /ai/llms.txt (this guide) /ai/2/openapi.json (stub spec listing the 21 AI paths).
+
+================================================================
+SECTION C - X/TWITTER JSON API (/api/2/...) - all 17 paths + extras
+================================================================
+
+C1. Single posts. GET /api/2/status/{tweet-id} -> {"code":200,"status":{...},"thread":null,"author":{...}}. Numeric id only (that is the digits in x.com/.../status/123). Deleted/protected/unknown id -> 404 envelope. +?lang= +?about_account=1 (appends extended account block).
+C2. Threads. GET /api/2/thread/{id} -> same envelope with "thread" holding the author's connected posts in order. Use for unroll/archive.
+C3. Conversations. GET /api/2/conversation/{id}?ranking_mode=likes|recency|relevance&cursor=&lang= -> post + ancestors + paginated direct replies. The local guest path 404s for most posts (X shut the guest path, verified Oct 2026); since 2026-11-16 this route falls back to the public API host (api.fxtwitter.com) and serves its page as-is when the local result is 404 or has no replies — page 1 replies are real (134 of 154 total on the verified test post), and the public cursor is preserved, but page 2+ through that cursor is unreliable/partial, so treat conversations as effectively page-1. /thread/{id} (author chain) + /status/{id}/quotes remain the deep alternatives.
+C4. Profile. GET /api/2/profile/{handle} - handle OR id:123 numeric form. -> {"code":200,"user":{author-shaped}}. +?about_account=1.
+C5. Profile about. GET /api/2/profile/{handle}/about -> extended/billing-adjacent account data. Local guest flow 404s; since 2026-11-16 it falls back to the public API host on 404/500 and serves its answer when it has one.
+C6. Timelines. GET /api/2/profile/{handle}/{statuses|media|articles|followers|following}?count=1-100&cursor=&with_replies=1&groupthreads=1&since=&lang= -> {"results":[],"cursor":{}}. statuses works fully here; media/articles/followers/following fail locally (500, pool-gated upstream) — articles/followers/following fall back to the public API host on 404/500 since 2026-11-16 (following and about answer there; followers and articles may still 404 when the public host has nothing). groupthreads=1 clusters timeline items into threads. with_replies=1 includes replies. Relay fallback: guest 404/empty timelines retry via profile RSS tabs (media/with_replies mapped), later pages walk from: windows.
+C7. Reposts/quotes. GET /api/2/status/{id}/{reposts|quotes}?count=&cursor=&lang=. QUOTES (upgraded 2026-11-16): the quoted_tweet_id: search now runs on BOTH the Latest and Top feeds in parallel, merged + deduped by post id (count up to 100 per feed); cursor.bottom is an opaque combined v2 cursor resuming both feeds (legacy single-feed cursors still work as Latest-feed cursors). If both feeds come up empty, quotes fall back to the public API host first (fast, reliable), then relay search. REPOSTS: local flow 500s (pool-gated); since 2026-11-16 it falls back to the public API host on 404/500, which serves real reposter lists.
+C8. Search. GET /api/2/search?q=&feed=latest|top|media&count=&cursor=&lang=&fast=. Served by the search relay (RSS discovery + per-post hydration): all X operators pass through (from:, filter:, lang:, since:, until:, within_time:, min_faves:, ...). Pagination chains the relay's Min-Id X cursor (max_position) inside a window via the opaque cursor.bottom, then falls back to since:/until: time windows. feed=media appends filter:media. feed=top ranks a hydrated pool (up to two walk windows, ~2x count posts) by engagement (likes + reposts, newest first on ties) — the relay itself only serves chronologically; fast=1 stubs carry no engagement data and are never ranked. fast=1 returns RSS-level stubs (text/author/time only, no stats or media) without hydration. from: operators are enforced exactly on the relay candidates (author match, case-insensitive, multiples union) — the relay's own from: matching also returns mere mentions. DEPTH (verified live 2026-11-12): deep walks return ~500 unique posts per common keyword (six-keyword battery: 250-534 uniques per keyword; lower-volume phrases end honestly at their true total). 2026-11-16 benchmark for honesty: a single "NFT whitelist" walk on deploy day returned 237 uniques over 15 pages - depth varies by day and phrase; ~500 remains a multi-day accumulation figure (stacking day-slices), NOT a single-walk promise. The day-stepping fallback skips empty days automatically - a sparse or empty day never ends a walk early. A 500 mid-walk is retryable (wait ~30s, retry the SAME request/cursor; the walk resumes at the failed window, nothing is skipped); only a 404 means genuinely exhausted. A query that is exactly list:{id} takes the direct list-RSS route (~99 posts per feed page). Empty = 404 envelope. People search (/search/users) stays removed - no relay surface for it. GET /api/2/profile/{handle}/search?q=&feed=&count=&cursor=&lang= is ours-only per-user search (relay profile search + windows); when the relay's per-user RSS misses a term entirely, it falls back to scanning the profile's recent ~60 posts and returns those containing every plain query term. GET /ai/2/ask?q=&pages=N (N default 3, max 8) walks N search pages server-side and returns ONE merged Markdown pack (author, time, full text, URL, likes/reposts per post) — the recommended deep route. /ai/2/search uses the same fast walk (pages= default 1, deep=1&pages=N for more, top 10 hydrated) in the normal search rendering; with a cursor parameter it keeps the legacy single-page passthrough. GET /api/2/relay-health reports per-root, per-job (search/profile/list) relay health (cached 2 min).
+C9. People/typeahead/trends. GET /api/2/typeahead?q=exa&result_type=&src= and GET /api/2/trends?type=trending&count= fail locally (pool-gated); since 2026-11-16 both fall back to the public API host on 404/500, which answers 200 for both.
+C10. Utilities. GET /api/2/owoembed?url={post-url} (oEmbed JSON: title/author/html). GET /api/2/hit?link= (click ping, 204). GET /api/2/go (redirect helper). GET /api/robots.txt. Legacy v1: GET /api/status/{id} and GET /api/{handle} (old embed-style JSON/HTML).
+C11. STATUS OBJECT FIELDS (exact keys): id, text, raw_text, lang, created_at, created_timestamp (seconds), likes, reposts, replies, quotes, bookmarks, views, url, source, replying_to (handle or null), reposted_by, is_note_tweet, community_note ({text} or null), embed_card ("tweet"|{title,url,...}|null), media {photos:[{url,width,height}], videos:[{url,thumbnail,duration,variants:[{url}]}], gifs:[same as videos]}, author {id,name,screen_name,description,raw_description,location,website,followers,following,likes,statuses,media_count,joined,protected,verification|verified,avatar_url,banner_url,url}, provider ("twitter"). Threads may embed tombstone placeholders for deleted/private posts instead of full objects.
+
+================================================================
+SECTION D - X EMBEDS + FEEDS (/twitter/...)
+================================================================
+
+D1. GET /twitter/{handle}/status/{id} and GET /twitter/{handle} -> embed HTML for Discord/Telegram. BOT UA REQUIRED (else 302 to x.com). Contains OpenGraph/Twitter-card meta, video player, poll, quote, translation fragments.
+D2. FEEDS (best polling primitive, any UA): GET /twitter/{handle}/feed.xml (RSS) | /twitter/{handle}/feed.atom.xml (Atom) | /twitter/{handle}/media.xml (media-only RSS) | /twitter/{handle}/media.atom.xml. Poll with If-None-Match / If-Modified-Since. KNOWN ISSUE: the media feeds (media.xml / media.atom.xml) currently return a bare HTTP 500 on this deployment - see Section N; the timeline feeds (feed.xml / feed.atom.xml) work.
+D3. GET /twitter/api/v1/statuses/{id} -> ActivityPub JSON view of a tweet (federation-friendly).
+D4. GET /twitter/owoembed?url={post-url} (oEmbed). GET /twitter/version (health/version page). GET /twitter/robots.txt. /twitter/hashtag/{tag} and /twitter/i/events/... are redirect demos.
+
+================================================================
+SECTION E - BLUESKY (/blueskyapi/2/... + /bluesky/...)
+================================================================
+
+E1. JSON (15 paths, same conventions as Section C incl. cursor/count/lang/since): status/{handle}/{rkey} | thread/{handle}/{rkey} | conversation/{handle}/{rkey} | status/{handle}/{rkey}/{reposts,likes} | profile/{handle} | profile/{handle}/{statuses,media,followers,following,likes} | search?q= | search/users?q= | typeahead?q= | trends. Handle may be bare (bsky.app) or did:plc:.... Items add at_uri + cid keys. likes endpoints need upstream auth (expect 4xx - by design, same on production). search?q= works: the public AppView edge-403s searchPosts from datacenter IPs, so the worker retries api.bsky.app automatically (production lacks that retry and answers 500 there). profile/{handle}/media excludes replies by default (?with_replies=1 to include them). External link-card thumbnails surface as image media.
+E2. RKEY RECIPE (rkey = post id): statuses?count=1 -> results[0].url ends .../post/{rkey} -> use in status/thread/conversation/reposts/likes paths.
+E3. Embeds (/bluesky/...): /bluesky/profile/{h}/post/{rkey} (bot UA for HTML) | /bluesky/profile/{h}/post/{rkey}/photo/{N} embeds only the Nth photo (N>=1, same /photo/N convention as X) | /bluesky/profile/{h}/feed.xml (RSS) | /bluesky/owoembed?url= | /bluesky/version.
+
+================================================================
+SECTION F - TIKTOK (/tiktok/... + /atmosphere/2/tiktok/...)
+================================================================
+
+F1. Realm pages: /tiktok/@{handle}/video/{numeric-id} (embed HTML, bot UA) | /tiktok/t/{shortcode} | /tiktok/api/{id} + /tiktok/raw/{id} (JSON: id,url,text,author{name,screen_name,avatar},likes,reposts,replies,views,media) | /tiktok/oembed?url= | /tiktok/proxy?url={video-url} (byte proxy; payload media URLs point at the serving host) | /tiktok/version.
+F2. Atmosphere JSON: /2/tiktok/status/{id} | /2/tiktok/profile/{handle} | /2/tiktok/profile/{handle}/statuses | /2/tiktok/hashtag/{tag} | /2/tiktok/music/{id}.
+F3. HARD LIMITS: only NUMERIC video ids work server-side; unsigned calls are IP-limited (a handful, then a long 429 cooldown surfacing as 404 - space out calls, never retry-loop); NO comments/likers/follow-lists/keyword-search/typeahead/trends exist (unsigned ByteDance APIs return empty 200s by design).
+
+================================================================
+SECTION G - INSTAGRAM (/instagram/... + /atmosphere/2/instagram/...)
+================================================================
+
+G1. Realm: /instagram/p/{shortcode} | /instagram/reel/{shortcode} | /instagram/api/{shortcode} (JSON) | /instagram/raw/{shortcode} | /instagram/owoembed?url= | /instagram/version. Invalid shortcodes -> 400 with reason. Telegram UA on a video post gets a 302 straight to the video file (embed container skipped; api/text-only/gallery/instant-view flags unchanged).
+G2. Atmosphere JSON: /2/instagram/status/{id} | /2/instagram/profile/{user} | /2/instagram/profile/{user}/{statuses,videos,conversation/{cid},tagged,stories,followers,following} | /2/instagram/status/{id}/likes | /2/instagram/search/users?q= | /2/instagram/typeahead?q=.
+G3. REALITY: logged-out Instagram is heavily blocked upstream - 500 envelopes are NORMAL and mirror production byte-for-byte. likers/follows/tagged/stories/user-search/typeahead are proxy-only: 501 without an Instagram account pool.
+
+================================================================
+SECTION H - THREADS (/atmosphere/2/threads/...) - 14 routes
+================================================================
+
+status/{id} | status/{id}/likes | profile/{user} | profile/{user}/{statuses,replies,reposts,media,followers,following} | conversation/{id} | search?q= | search/users?q= | trends | typeahead?q=. Post/profile/timeline/conversation prefer the account proxy and fall back to logged-out; search/typeahead/trends/likes/follows/replies/reposts/media tabs are proxy-only (501 without credentials).
+
+================================================================
+SECTION I - MASTODON / ACTIVITYPUB (/atmosphere/2/mastodon/{domain}/...) - 12 routes, needs nothing
+================================================================
+
+status/{id} | status/{id}/{reposts,likes} | thread/{id} | conversation/{id} | search?q= | search/users?q= | profile/{handle} | profile/{handle}/{followers,following,media,statuses}. {domain} = any instance (mastodon.social, ...). Profile screen_names may render as handle@domain. search?q= answers 200 with results:[] for statuses - Mastodon only serves status search to authenticated callers, so an empty page is the true upstream answer (search/users?q= DOES return hits anonymously). URL shapes for /ai/2/post?url=: /@{h}/{id}, /users/{h}/statuses/{id}, /notice/{id}, /@{h}, /users/{h}.
+
+================================================================
+SECTION J - ATMOSPHERE MISC
+================================================================
+
+J1. Forwards /atmosphere/2/twitter/* and /2/bluesky/* re-dispatch to the Twitter/Bluesky APIs. QUIRK: they 404 on *.workers.dev (the internal path keeps the /atmosphere prefix) - use /api + /blueskyapi directly there; forwards work on custom domains.
+J2. /atmosphere/ carries the SAME /proxy TikTok route as the TikTok realm. /atmosphere/ root explains the service; /atmosphere/2/openapi.json lists all 43 paths.
+
+================================================================
+SECTION K - HIDDEN HACKS AND BEHAVIORS (the non-obvious list)
+================================================================
+
+K1. cursor.bottom loop (Section A4) is the ONLY pagination primitive - works on timelines, search, reposts, quotes, followers.
+K2. ?since=<unix-sec> + HTTP 204 = cheapest change-detection on ANY timeline.
+K3. ?lang= is accepted (status/thread/conversation/statuses/search/quotes) but translation is a NO-OP on this deployment - known issue, see A6 and Section N.
+K4. ?about_account=1 appends extended account data to X status/thread/profile calls.
+K5. ?groupthreads=1 clusters an X timeline into thread groups; ?with_replies=1 includes replies.
+K6. id:123 addresses X users by numeric id anywhere a {handle} goes.
+K7. Credential-gated LOCALLY on this worker: X profile/{media,articles,followers,following,about}, status/{id}/reposts, typeahead, trends, conversation. Since 2026-11-16 all of these except profile media fall back to the public API host on local failure (see K19) — conversation/reposts/following/about/trends/typeahead answer through it; followers/articles answer only when the public host has data. This worker itself never runs a credential pool, cookies or logins.
+K8. TikTok 429-cooldown flaps as 404 on every host including production - back off, do not hammer.
+K9. Bot UA gets embed HTML; browser UA gets 302 (embeds) or normal JSON (APIs). Test embeds with: curl -H "User-Agent: Discordbot/2.0".
+K10. /error route: returns 200 + branded HTML for bot UAs, empty 400 otherwise (worker fallback page).
+K11. version endpoints in EVERY realm double as health checks. robots.txt in twitter/api realms.
+K12. Feed the three openapi.json URLs to any OpenAPI codegen to build typed clients instantly.
+K13. thread/ = author's connected posts; conversation/ = post + ancestors + replies. Different calls, different jobs.
+K14. Deleted/private posts inside threads surface as tombstone placeholders, not errors - handle missing "text".
+K15. oEmbed works in all four embed realms with just ?url= (no auth, no UA games for the JSON form).
+K16. Telegram UA behaviors: X photos served as the name=large variant; IG video posts 302 straight to the video file.
+K17. Non-Discord embeds prefix replies with "↩ Display Name (@handle)" (bare @handle when the account has no display name).
+K18. X search relay: discovery fetches the relay RSS from every configured root in parallel and merges the feeds (two rounds only when all roots fail; flakes possible), hydration rebuilds each id via TweetDetail (x12 parallel, drops failures), pages chain the relay's Min-Id header as max_position inside a window (real X cursor, ~20/feed page) and fall back to since:/until: windows in the opaque cursor (v2 with a mode field — 'chain' or 'day'; v1 cursors still decode), merged window up to 60, stats come from hydration (fast=1 skips it). Hybrid resilience: a stalled page (0 new posts, repeated Min-Id, or a missing Min-Id header — the relay's RSS cache does all three) is retried once at the same position, then the walk day-steps instead of ending; it ends only when both modes are exhausted. A valid but EMPTY RSS feed (HTTP ok, real RSS/XML body, zero items) counts as a successful zero-result fetch - the true end of a window - not a relay failure. If a window's FIRST page fails totally, that window is UNKNOWN, not exhausted: the walk answers a retryable 500, or serves the items already collected with a resume cursor positioned at the failed window - never a false 404. The walk's day-step window budget is 5 steps. Relay roots are per job: search via X_SEARCH_RELAY_ROOTS / X_SEARCH_RELAY_ROOT, profile RSS via X_PROFILE_RELAY_ROOTS, list RSS via X_LIST_RELAY_ROOTS (more instances serve profile/list RSS than search RSS). Census 2026-11-16 (20 wiki instances probed for search RSS): only nitter.kareem.one and nitter.mie.foundation genuinely serve search RSS, so search roots are exactly those two; profile/list roots are kareem + jaydenha + mie. nitterts.pages.dev is dead (403 from every network) and was removed from all root lists. Fan-out is failure-tolerant: every root is fetched in parallel with a per-root timeout and a dead root neither stalls nor starves a window (a second round runs only when ALL roots fail). Bot walls differ per source IP, so VM-side probe results can differ from worker-side — GET /api/2/relay-health shows which roots answer per job FROM the worker.
+K19. Fallbacks: profile statuses/media/replies + quotes retry via relay when the guest flow 404s or returns empty (primary kept when relay also misses); profile search/rss powers the ours-only /profile/{handle}/search route. id:123 forms never relay (screen names only). PUBLIC-HOST SAFETY NET (2026-11-16): when the local guest flow still fails, these routes fetch the same path once from https://api.fxtwitter.com (paths there are /2/... without the /api prefix) and serve its 200 envelope as-is, cursor preserved: conversation (on 404 or empty replies), quotes (after feeds + relay), status reposts, profile followers/following/articles/about, trends, typeahead (all on local 404/500 only). A public 404 leaves the local answer untouched; a local success is never overridden.
+
+================================================================
+SECTION L - ERROR CATALOG
+================================================================
+
+401 (no UA): {"error":"You must identify yourself with a User-Agent header..."} -> add -H "User-Agent: MyAgent/1.0". 403 with default library UAs: edge challenge -> use a descriptive UA. 404 envelope {"code":404,"message":"..."}: upstream empty/unknown/deleted - usually the ANSWER, not a bug. 500 envelope: upstream failure OR missing credential pool (Section K7) OR logged-out Instagram block. 501: proxy-only route without account pool (IG/Threads gated lists). 503: Bluesky upstream unavailable (retry). 204: ?since= found nothing new (poll again later). /ai mirrors all of these 1:1 as "# Error" docs.
+
+================================================================
+SECTION M - AGENT COOKBOOK (copy-paste, BASE=https://fixtweet.twapiworker.workers.dev)
+================================================================
+
+M1. Fastest LLM answer to any link: GET BASE/ai/2/post?url=<urlencoded-post-url>
+M2. Monitor an account: loop GET BASE/api/2/profile/X/statuses?count=5&since=<last-unix> (204 = nothing new). Or poll BASE/twitter/X/feed.xml.
+M3. Unroll + archive: GET BASE/ai/2/thread/20 -> Markdown transcript with stats + media links.
+M4. Both sides of a debate: GET BASE/ai/2/thread/20 (author side) + BASE/ai/2/status/20/quotes (reactor side via relay).
+M5. Bluesky deep read: statuses?count=1 -> rkey -> BASE/ai/2/bsky/status/bsky.app/{rkey} and .../thread/.../....
+M6. Keyword search + people map: BASE/api/2/search?q=&feed=&count= -> follow cursor.bottom (time-window pages). Per-user: BASE/api/2/profile/{handle}/search?q=. People search has no relay surface - start from a known handle -> BASE/api/2/profile/{handle}/statuses?count=5.
+M7. Trend radar: cron on BASE/api/2/trends + BASE/api/2/typeahead?q=<seed> (local flow is pool-gated; both fall back to the public API host since 2026-11-16).
+M8. Cross-network person check: /ai/2/post?url= once per profile URL (X + Bsky + Mastodon + Threads + IG + TikTok).
+M9. Link previews for chat: BASE/api/2/owoembed?url=<url> (JSON card with title/author/html).
+M10. Full-fidelity pipeline: JSON API for machines (/api...), /ai Markdown for reasoning, RSS for triggers, oEmbed for previews.
+
+================================================================
+SECTION N - KNOWN ISSUES AND LIMITS (do not retry-loop)
+================================================================
+
+KNOWN ISSUES on THIS deployment (verified 2026-11-16; everything else in this guide works as documented):
+N-1. Profile media RSS/Atom feeds (/twitter/{handle}/media.xml, /twitter/{handle}/media.atom.xml) return a bare HTTP 500 with an empty body. The timeline feeds (feed.xml / feed.atom.xml) work. The /api/2/profile/{handle}/media route is likewise pool-gated locally and is NOT covered by the public-host fallback (K7).
+N-2. ?lang= translation is a NO-OP here (A6): the parameter is accepted on status/thread/conversation/statuses/search/quotes but text comes back untranslated, unmarked.
+N-3. /photo/1 embed pages (/twitter/{handle}/status/{id}/photo/1) render the large-image card WITHOUT an og:image meta tag - a chat client may show a card with no picture.
+N-4. Subdomain modifiers (d. direct-media, t. text-only, g. gallery, m. mosaic, i. instant-view, o. old-embeds) are NOT available on *.workers.dev hosts - they need real realm domains with wildcard routing, and there is no path-based equivalent on this deployment.
+N-5. GET /api/2/profile/Enter_Elysium/following returns 500 even through the public-host fallback - the public host has no data for that account's following either. Other accounts' following answers through the fallback; treat a fallback-miss as "no data anywhere", not a bug to retry-loop.
+N-6. Conversations are effectively PAGE-1 (C3): the native guest path is dead, the fallback serves the public host's first page for real, and paging deeper through its cursor is unreliable.
+N-7. Quotes may be served by the public-host fallback when the guest feeds are empty (C7, K19) - the payload shape is identical, but coverage then depends on the public host, not on this worker's own guest feeds.
+N-8. Single-post guest answers can flake per request and per base: one attempt (or one clone) can 404 a post that another attempt serves fine. A single 404 on /api/2/status/{id} is not proof a post is gone - retry once, or try the other base (TWO BASES, above).
+
+GENERAL LIMITS:
+No Reddit/Facebook/YouTube. No TikTok comments/likers/search. Synthetic ids (quote misses) 404 BY DESIGN. Instagram 500s mirror production. TikTok hashtag/music flap under rate limits everywhere. /ai error docs ARE the final answer when upstream has nothing. This worker has no Twitter/X credential pool (K7); everything else runs fully logged-out.
