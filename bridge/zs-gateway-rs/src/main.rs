@@ -25,6 +25,8 @@ pub const MODELS_FILE: &str = "/root/pi-bridge/models.json";
 pub const ROTATION_FILE: &str = "/root/pi-bridge/key-rotation.json";
 pub const ZS_CONFIG: &str = "/root/.config/zerostack/config.toml";
 pub const ADMIN_HTML: &str = include_str!("admin.html");
+pub const SETTINGS_HTML: &str = include_str!("settings.html");
+pub const HOME_HTML: &str = include_str!("home.html");
 
 pub fn log(msg: &str) {
     util::log(msg);
@@ -159,6 +161,168 @@ fn save_monid(key: &str) -> bool {
         );
     }
     ok
+}
+
+// ---- vault Worker URL (the user's own, never hardcoded) -------------------
+pub const VAULT_FILE: &str = "/root/pi-bridge/vault-url.txt";
+pub const SEARCH_FILE: &str = "/root/pi-bridge/search.json";
+
+fn set_mode_600(path: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+/// Trim, drop a trailing slash, keep a path; accept only
+/// https://<name>.<sub>.workers.dev[/...]. None = not a Worker URL.
+fn clean_worker_url(raw: &str) -> Option<String> {
+    let s = raw.trim().trim_end_matches('/').to_string();
+    let rest = s.strip_prefix("https://")?;
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.len() != 4 {
+        return None;
+    }
+    let name = labels[0];
+    let alnum = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    if name.is_empty()
+        || !name.chars().all(|c| alnum(c) || c == '-')
+        || !name.starts_with(alnum)
+        || !name.ends_with(alnum)
+    {
+        return None;
+    }
+    if labels[1].is_empty() || !labels[1].chars().all(|c| alnum(c) || c == '-') {
+        return None;
+    }
+    if labels[2] != "workers" || labels[3] != "dev" {
+        return None;
+    }
+    let path = &rest[host.len()..];
+    if !path.is_empty() && !path.starts_with('/') {
+        return None;
+    }
+    if path.chars().any(|c| c.is_whitespace() || c == '"' || c == '\\') {
+        return None;
+    }
+    Some(s)
+}
+
+/// The vault URL the user saved, else whatever config.toml has.
+fn saved_vault_url() -> String {
+    if let Ok(t) = std::fs::read_to_string(VAULT_FILE) {
+        let u = t.trim().to_string();
+        if !u.is_empty() {
+            return u;
+        }
+    }
+    zs_config()
+        .get("mcp_servers")
+        .and_then(|m| m.get("vault"))
+        .and_then(|v| v.get("url"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// Save the URL, then repoint [mcp_servers.vault] url at it. Line edits, not a
+/// toml round-trip: that would reorder the user's config. The auth header stays.
+fn save_vault_url(raw: &str) -> Result<Value, String> {
+    let url = if raw.trim().is_empty() {
+        String::new()
+    } else {
+        clean_worker_url(raw).ok_or_else(|| {
+            "not a Worker URL — it should look like https://<name>.<sub>.workers.dev".to_string()
+        })?
+    };
+    std::fs::write(VAULT_FILE, format!("{}\n", url))
+        .map_err(|e| format!("could not save the vault URL: {}", e))?;
+    set_mode_600(VAULT_FILE);
+    if url.is_empty() {
+        return Ok(json!({"ok": true, "vault_url": "", "config": "cleared"}));
+    }
+    let mcp_url = if url.ends_with("/mcp") { url.clone() } else { format!("{}/mcp", url) };
+    let text = std::fs::read_to_string(ZS_CONFIG)
+        .map_err(|e| format!("could not read the config: {}", e))?;
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    let new_line = format!("url = \"{}\"", mcp_url);
+    match lines.iter().position(|l| l.trim() == "[mcp_servers.vault]") {
+        Some(h) => {
+            let end = lines[h + 1..]
+                .iter()
+                .position(|l| l.trim_start().starts_with('['))
+                .map(|o| h + 1 + o)
+                .unwrap_or(lines.len());
+            let mut done = false;
+            for l in lines.iter_mut().take(end).skip(h + 1) {
+                let t = l.trim_start();
+                if t.starts_with("url") && t.contains('=') {
+                    *l = new_line.clone();
+                    done = true;
+                    break;
+                }
+            }
+            if !done {
+                lines.insert(h + 1, new_line.clone());
+            }
+        }
+        None => {
+            lines.push(String::new());
+            lines.push("[mcp_servers.vault]".to_string());
+            lines.push(new_line.clone());
+            lines.push("connect_timeout_secs = 30".to_string());
+            lines.push("tool_timeout_secs = 30".to_string());
+            lines.push("connect_retries = 2".to_string());
+        }
+    }
+    let body = lines.join("\n") + "\n";
+    if toml::from_str::<toml::Value>(&body).is_err() {
+        return Err("could not update the Zerostack config — it would not parse as TOML, left as it was".into());
+    }
+    std::fs::write(ZS_CONFIG, body).map_err(|e| format!("could not write the config: {}", e))?;
+    Ok(json!({"ok": true, "vault_url": url, "config": "updated", "mcp_url": mcp_url}))
+}
+
+// ---- web search settings --------------------------------------------------
+// Stored in search.json; read by web.py and the web-research skill from the
+// shell env. The Monid key is NOT in this file — it stays in Monid's own
+// credential store, the same one POST /monid writes.
+fn search_cfg() -> Value {
+    let v = std::fs::read_to_string(SEARCH_FILE)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| json!({}));
+    let on = |k: &str, d: bool| v.get(k).and_then(|x| x.as_bool()).unwrap_or(d);
+    json!({
+        "cf_search_url": v.get("cf_search_url").and_then(|x| x.as_str()).unwrap_or(""),
+        "tinyfish": on("tinyfish", true),
+        "bing": on("bing", true),
+        "x": on("x", true),
+    })
+}
+
+fn save_search_cfg(b: &Value) -> Result<Value, String> {
+    let mut cur = search_cfg();
+    if let Some(raw) = b.get("cf_search_url").and_then(|v| v.as_str()) {
+        cur["cf_search_url"] = json!(match raw.trim() {
+            "" => String::new(),
+            s => clean_worker_url(s).ok_or_else(|| {
+                "the cf-search URL is not a Worker URL — it should look like https://<name>.<sub>.workers.dev"
+                    .to_string()
+            })?,
+        });
+    }
+    for k in ["tinyfish", "bing", "x"] {
+        if let Some(v) = b.get(k).and_then(|v| v.as_bool()) {
+            cur[k] = json!(v);
+        }
+    }
+    let body = serde_json::to_string_pretty(&cur).unwrap_or_else(|_| "{}".to_string());
+    std::fs::write(SEARCH_FILE, format!("{}\n", body))
+        .map_err(|e| format!("could not save the search settings: {}", e))?;
+    set_mode_600(SEARCH_FILE);
+    Ok(cur)
 }
 
 fn provider_key_status() -> Value {
@@ -509,6 +673,9 @@ fn handle(app: &Arc<App>, req: &http::Request) -> http::Response {
     let method = req.method.as_str();
 
     // ---- unauthenticated page routes ----
+    if method == "GET" && path == "/" {
+        return http::Response::html(HOME_HTML.as_bytes().to_vec());
+    }
     if method == "GET" && (path == "/pi" || path == "/pi.html") {
         return match read_static(&format!("{}/zs.html", BASE)) {
             Some(b) => http::Response::html(b),
@@ -519,6 +686,9 @@ fn handle(app: &Arc<App>, req: &http::Request) -> http::Response {
     }
     if method == "GET" && path == "/admin" {
         return http::Response::html(ADMIN_HTML.as_bytes().to_vec());
+    }
+    if method == "GET" && (path == "/pi/settings" || path == "/settings") {
+        return http::Response::html(SETTINGS_HTML.as_bytes().to_vec());
     }
 
     // ---- opening password / token ----
@@ -587,11 +757,11 @@ fn handle(app: &Arc<App>, req: &http::Request) -> http::Response {
                         .unwrap_or_default();
                     return json_ok(json!({"defaultProvider": p, "defaultModel": m}));
                 }
+                "/settings-info" => return json_ok(settings_info()),
                 "/switch" => {
                     return json_ok(json!({
                         "backend": "zerostack",
                         "url": public_url("ZS_ZS_URL", "/pi"),
-                        "pi_url": public_url("ZS_PI_URL", "http://127.0.0.1:8765/pi"),
                     }))
                 }
                 _ => {}
@@ -692,6 +862,29 @@ fn handle(app: &Arc<App>, req: &http::Request) -> http::Response {
                     return json_err(400, "bad key");
                 }
                 return json_ok(json!({"ok": true}));
+            }
+            // The vault Worker URL is the user's own: no default, no guess.
+            // Saved to vault-url.txt and written into [mcp_servers.vault].
+            "/vault-url" => {
+                let url = body.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                return result_resp(save_vault_url(url));
+            }
+            // Web search: the Worker URL and the three leg toggles -> search.json;
+            // the Monid key goes to the same store POST /monid writes (one key,
+            // one place). A key already set is never returned by /settings-info.
+            "/search-settings" => {
+                let mut b = body.clone();
+                if let Some(k) = b.get("monid_key").and_then(|v| v.as_str()).map(|s| s.trim().to_string()) {
+                    if k.is_empty() {
+                        b.as_object_mut().map(|o| o.remove("monid_key"));
+                    } else if !save_monid(&k) {
+                        return json_err(400, "the Monid key looks too short — paste the whole key");
+                    }
+                }
+                return match save_search_cfg(&b) {
+                    Ok(_) => json_ok(json!({"ok": true, "monid_set": monid_status()["set"].clone()})),
+                    Err(e) => json_err(400, &e),
+                };
             }
             "/secret" => {
                 let env_name = body.get("env_name").and_then(|v| v.as_str()).unwrap_or("").trim();
@@ -864,9 +1057,10 @@ fn handle(app: &Arc<App>, req: &http::Request) -> http::Response {
             "/switch" => {
                 let want = body.get("backend").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
                 return match want.as_str() {
-                    "pi" => json_ok(json!({"backend": "pi", "url": public_url("ZS_PI_URL", "http://127.0.0.1:8765/pi")})),
+                    // Pi is fully removed from this server (2026-11-21). Only
+                    // Zerostack remains; switching to Pi is gone.
                     "zerostack" => json_ok(json!({"backend": "zerostack", "url": public_url("ZS_ZS_URL", "/pi")})),
-                    _ => json_err(400, "backend must be 'pi' or 'zerostack'"),
+                    _ => json_err(400, "only 'zerostack' is available — Pi was removed"),
                 };
             }
             "/restart" => {
@@ -954,6 +1148,122 @@ fn handle(app: &Arc<App>, req: &http::Request) -> http::Response {
         }
         return json_err(404, "unknown route");
     }
+}
+
+/// Settings panel data for the /pi page: what Zerostack actually has.
+/// Skills come from the prompts dir, MCP servers from config.toml.
+/// Vault: the Worker URL + agent are fixed; the gateway cannot know the
+/// unlock state (only Muse holds the master secret), so the status says so.
+fn settings_info() -> Value {
+    // Zerostack version, best effort.
+    let version = std::process::Command::new("/root/.local/bin/zerostack")
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    // Skills: prompt files in the Zerostack prompts dir.
+    let mut skills: Vec<Value> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir("/root/.local/share/zerostack/prompts") {
+        let mut names: Vec<String> = rd
+            .flatten()
+            .filter_map(|e| {
+                let n = e.file_name().to_string_lossy().to_string();
+                if n.ends_with(".md") {
+                    Some(n.trim_end_matches(".md").to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        names.sort();
+        for n in names {
+            let desc = std::fs::read_to_string(format!(
+                "/root/.local/share/zerostack/prompts/{}.md",
+                n
+            ))
+            .ok()
+            .and_then(|t| {
+                t.lines()
+                    .find(|l| {
+                        let l = l.trim();
+                        !l.is_empty() && !l.starts_with('#')
+                    })
+                    .map(|l| l.trim().to_string())
+            })
+            .unwrap_or_default();
+            skills.push(json!({"name": n, "desc": desc}));
+        }
+    }
+    // MCP servers from config.toml [mcp_servers].
+    let mut mcp: Vec<Value> = Vec::new();
+    if let Ok(text) = std::fs::read_to_string(ZS_CONFIG) {
+        if let Ok(v) = toml::from_str::<toml::Value>(&text) {
+            if let Some(servers) = v
+                .get("mcp_servers")
+                .and_then(|s| s.as_table())
+            {
+                let mut names: Vec<String> = servers.keys().cloned().collect();
+                names.sort();
+                for name in names {
+                    let s = &servers[&name];
+                    let url = s
+                        .get("url")
+                        .and_then(|u| u.as_str())
+                        .map(|u| u.to_string())
+                        .unwrap_or_default();
+                    let command = s
+                        .get("command")
+                        .and_then(|c| c.as_str())
+                        .map(|c| c.to_string())
+                        .unwrap_or_default();
+                    let target = if !url.is_empty() {
+                        url
+                    } else {
+                        command
+                    };
+                    mcp.push(json!({
+                        "name": name,
+                        "url": target,
+                        "note": "TUI only — ACP never loads MCP",
+                    }));
+                }
+            }
+        }
+    }
+    let running = acp::sessions_list()
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
+    // What [mcp_servers.vault] actually points at now, so the settings page
+    // can show a missing /mcp next to the plain Worker URL.
+    let vault_mcp_url = mcp
+        .iter()
+        .find(|m| m.get("name").and_then(|n| n.as_str()) == Some("vault"))
+        .and_then(|m| m.get("url").and_then(|u| u.as_str()).map(String::from))
+        .unwrap_or_default();
+    json!({
+        "zerostack_version": version,
+        "zerostack_bin": "/root/.local/bin/zerostack",
+        "config_path": ZS_CONFIG,
+        "gateway_impl": "rust",
+        "gateway_pid": std::process::id(),
+        "sessions_running": running,
+        "acp": "gateway talks to Zerostack over ACP; the gateway owns transcripts",
+        "skills": skills,
+        "mcp": mcp,
+        "vault_url": saved_vault_url(),
+        "vault_mcp_url": vault_mcp_url,
+        "vault_agent": "zerostack-altare",
+        "vault_status": "locked unless Muse unlocked it — ask Muse to unlock for a service; vault tools work in the Zerostack terminal only",
+        "vault_keys": [],
+        "env_file": format!("{}/provider-keys.env", BASE),
+        "search": search_cfg(),
+        "search_env_var": "CF_SEARCH_URL",
+        "monid_set": monid_status()["set"].clone(),
+    })
 }
 
 fn main() {
