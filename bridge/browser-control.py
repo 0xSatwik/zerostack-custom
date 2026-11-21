@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Browser takeover control page + Stop/Start for the Instabox browser box.
 Serves on 0.0.0.0:6081. Password-protected: the login accepts the gateway
-token (the same token that unlocks /pi and /admin). A session cookie keeps
-the user logged in. The VNC iframe only renders after login.
+token OR the opening password (the same two that unlock /pi and /admin).
+A session cookie keeps the user logged in. The VNC iframe only renders
+after login.
 """
 import hashlib
 import hmac
@@ -15,9 +16,12 @@ from urllib.parse import urlparse, parse_qs
 
 VNC_URL = os.environ.get("VNC_URL", "/browser-vnc/vnc.html?autoconnect=true&resize=remote")
 PORT = 6081
-# The gateway token, copied here from the Altare box (chmod 600). The login
-# accepts this token, or the opening password's SHA-256 (not stored here).
+# The gateway token, copied here from the Altare box (chmod 600).
 TOKEN_FILE = "/data/workspace/browser-auth.txt"
+# The opening password's SHA-256, copied here from the Altare box
+# (gateway.env PI_ADMIN_PASS_SHA256, chmod 600). The password itself is
+# never stored here — only its hash, so the login can verify it.
+PASS_HASH_FILE = "/data/workspace/browser-pass-hash.txt"
 
 SESSIONS = set()
 
@@ -30,12 +34,26 @@ def _token():
         return ""
 
 
+def _pass_hash():
+    try:
+        with open(PASS_HASH_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def _check_password(pw):
+    # Accepts the gateway token directly, OR the opening password
+    # (verified by comparing its SHA-256 to the stored hash).
     tok = _token()
-    if not tok:
-        return False
-    # Constant-time compare against the gateway token.
-    return hmac.compare_digest(pw, tok)
+    if tok and hmac.compare_digest(pw, tok):
+        return True
+    ph = _pass_hash()
+    if ph:
+        pw_hash = hashlib.sha256(pw.encode()).hexdigest()
+        if hmac.compare_digest(pw_hash, ph):
+            return True
+    return False
 
 
 def _authed(handler):
