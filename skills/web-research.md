@@ -1,30 +1,53 @@
-<!-- Installed for Zerostack on the Altare box, 2026-11-20, from Pi's pi-bridge/SKILL.md. -->
+<!-- Installed for Zerostack on the Altare box. -->
 <!-- Zerostack has no skills directory: this file IS the skill, as a named prompt. -->
 <!-- Load it with `/prompt web-research`, `.web-research <msg>`, or `zerostack --load-prompt web-research`. -->
-# web-research
 
-> Best search and fetch system for Muse and Pi — TinyFish free via Monid + cf-search Worker (Bing) combined for maximum URLs, TinyFish free fetch, and X/Bluesky/TikTok/Instagram/Threads/Mastodon via FxEmbed. Use for ANY web research, X search, or fetching pages. Always use the combined `research` command, never a single source.
+---
+name: web-research
+description: Best search and fetch system for Muse and Zerostack — TinyFish free via Monid + cf-search Worker (Bing) combined for maximum URLs, TinyFish free fetch, and X/Bluesky/TikTok/Instagram/Threads/Mastodon via the fixtweet worker. Use for ANY web research, X search, or fetching pages. Always use the combined `research` command, never a single source.
+---
 
 # Web Research — the only search/fetch system to use
 
-Muse and Pi must ALWAYS use this system for web research. Never use a
+Muse and Zerostack must ALWAYS use this system for web research. Never use a
 single search engine, never curl a search page by hand, never guess.
 
 ## The tool
 
 Muse: `python3 ~/workspace/search/web.py`
-Zerostack and Pi (both on the Altare box): `python3 /root/pi-bridge/search.py`
+Zerostack (on Altare sandbox): `python3 /root/pi-bridge/search.py` (same file)
+
+## Worker URLs — set by the user in /admin, never hardcoded
+
+Both search workers are the user's own deployments. The user sets their
+URLs in the **/admin page → Keys & secrets → Web search — worker URLs**.
+They are stored in `search.json` next to `web.py` (chmod 600) — no URL
+is ever written literally in code, in a skill, or in the repo.
+
+- **fixtweet worker URL** (X / social) + optional second URL (failover,
+  e.g. the `-2` clone). If empty, the X leg is skipped.
+- **cf-search worker URL** (Bing). If empty, the Bing leg is skipped.
+- **Leg toggles**: TinyFish, Bing, X — on/off each.
+- **Monid key** (TinyFish): same /admin page, write-only, stored in
+  Monid's own credential store (`~/.config/monid/credentials.yaml`).
+
+`web.py` reads `search.json` on every run (env vars `FXEMBED_WORKER_URL`,
+`FXEMBED_WORKER_URL_2`, `CF_SEARCH_URL` override it). If a URL is not
+set, that leg prints a skip note to stderr and the other legs still work.
+
+Full manuals: the fixtweet worker's `/llms.txt` and the cf-search
+worker's `/llm.txt` (fetch either URL + `/llms.txt` or `/llm.txt`).
 
 ## Combined research — default for every research question
 
 ```
-python3 /root/pi-bridge/search.py research "your question" --pages 2 --fetch-top 5
+python3 web.py research "your question" --pages 2 --fetch-top 5
 ```
 
 What it does, in one call (code-mode style — 1 tool call, not 6-8):
 1. **Web search, two engines, deduped** — TinyFish `/free/search`
    via Monid ($0) + cf-search Worker (Bing, no key). Maximum URLs.
-2. **X search** — FxEmbed `/ai/2/ask?q=&pages=2`, merged Markdown pack.
+2. **X search** — fixtweet worker `/ai/2/ask?q=&pages=2`, merged Markdown pack.
 3. **Fetch top 5 URLs** — TinyFish `/free/fetch` ($0, clean Markdown),
    fallback plain curl.
 
@@ -34,9 +57,9 @@ commands below only when you need just one piece.
 ## Web search — two engines, combined
 
 ```
-python3 /root/pi-bridge/search.py search "query" [--purpose "what the results are for"]
-python3 /root/pi-bridge/search.py search-cf "query" [--vertical web|images|videos|news] [--count 10] [--cc IN] [--setlang en-IN] [--time week]
-python3 /root/pi-bridge/search.py fetch https://example.com [https://...]   # up to 10 URLs
+python3 web.py search "query" [--purpose "what the results are for"]
+python3 web.py search-cf "query" [--vertical web|images|videos|news] [--count 10] [--cc IN] [--setlang en-IN] [--time week]
+python3 web.py fetch https://example.com [https://...]   # up to 10 URLs
 ```
 
 ### TinyFish (primary, via Monid)
@@ -50,20 +73,18 @@ python3 /root/pi-bridge/search.py fetch https://example.com [https://...]   # up
   ones are $0. Monid balance is $1; free calls cost $0.
 - Monid key: from `~/.config/monid/credentials.yaml` (label `main`,
   chmod 600) or `$MONID_API_KEY`. NEVER write the literal key in a
-  file, in chat, or in memory. On the Pi sandbox it lives as an env
-  export in `/root/.profile`, same as the other API keys.
+  file, in chat, or in memory. On the Altare box it lives in the same
+  file (`/root/.config/monid/credentials.yaml`); the /admin page's
+  Monid card writes it there.
 
 ### cf-search Worker (Bing, no key) — second leg
 
-- `GET /search?q=...` at YOUR Worker URL (see below). Plain text, one
-  line per result: `N. Title - URL`. No JSON, no format parameter.
-  Health: `GET /health` returns `ok cf-search web images videos news`.
-- **The Worker URL is NEVER hardcoded.** It is the user's own Worker,
-  deployed from `docs/SEARCH-WORKER.md`. **Muse ASKS the user for
-  their Worker URL during setup** and sets `CF_SEARCH_URL` (env export).
-  If it is empty, the cf-search leg is skipped and TinyFish + X still work.
-- Full manual: `search/cf-search-llms.txt` in this repo (also live at
-  `<your-worker-url>/llms.txt` once deployed).
+- `GET /search?q=...` at the user's Worker URL (set in /admin, see
+  above). Plain text, one line per result: `N. Title - URL`. No JSON,
+  no format parameter. Health: `GET /health` returns
+  `ok cf-search web images videos news`.
+- Full manual: `search/cf-search-llms.txt` in the repo (also live at
+  `<your-worker-url>/llm.txt` once deployed).
 
 **Filters (all Bing filters):**
 
@@ -125,29 +146,29 @@ News only (vertical=news, Bing News):
 ### DuckDuckGo — REMOVED (2026-11-19)
 
 DuckDuckGo was the third leg and is now REMOVED from web.py, the skill,
-and the repo. It returns nothing from the Pi sandbox (bot-challenge,
+and the repo. It returns nothing from the Altare sandbox (bot-challenge,
 `[]`) and from Cloudflare's network (HTTP 202). It only works from a
 normal VM. Do not add it back. If a search needs a third source, use
 a different query/country/time filter on the Bing Worker instead.
 
-## X / social search — FxEmbed, no key
+## X / social search — fixtweet worker, no key
 
-Base: `https://fixtweet.twapiworker.workers.dev`
-(clone: `https://fixtweet-2.twapiworker.workers.dev` — fail over on flake)
+The worker URL is set by the user in /admin (see "Worker URLs" above)
+— it is NEVER hardcoded in code or in this skill. Two bases exist
+(the worker and its identical `-2` clone) — set both for failover.
 **User-Agent header is MANDATORY** on every `/api` and `/ai` call
-(e.g. `Muse/1.0`); missing UA = HTTP 401. Full manual (229 lines):
-`search/fxembed-llms.txt` in this repo (also live at
-`https://fixtweet.twapiworker.workers.dev/llms.txt`).
+(e.g. `Muse/1.0`); missing UA = HTTP 401. Full manual: the worker's
+`/llms.txt` (fetch `<worker-url>/llms.txt`).
 
 Networks: X/Twitter, Bluesky, TikTok, Instagram, Threads, any
 Mastodon/ActivityPub instance. NOT supported: Reddit, Facebook,
 YouTube, TikTok comments/likers/search.
 
 ```
-python3 /root/pi-bridge/search.py xsearch "Pi coding agent" [--pages 3]   # /ai/2/ask, merged pack
-python3 /root/pi-bridge/search.py xpost https://x.com/jack/status/20  # any post URL, or just the id
-python3 /root/pi-bridge/search.py xprofile <handle>                        # X profile
-python3 /root/pi-bridge/search.py xtrends                                   # X trends
+python3 web.py xsearch "Zerostack agent" [--pages 3]   # /ai/2/ask, merged pack
+python3 web.py xpost https://x.com/jack/status/20  # any post URL, or just the id
+python3 web.py xprofile <handle>                        # X profile
+python3 web.py xtrends                                   # X trends
 ```
 
 ### The 3 core recipes
@@ -232,13 +253,4 @@ python3 /root/pi-bridge/search.py xtrends                                   # X 
 6. **Bing pagination does not work** — do not call `page=2` expecting
    new results. Vary the query, country, language, or time filter instead.
 7. **DuckDuckGo is removed** — do not add it back. It does not work
-   from Pi or Cloudflare.
-
-
-## Zerostack notes
-
-Run the tool through the `bash` tool. There is no separate search tool here, and
-Zerostack's built-in Exa search is disabled (`enable-exa-mcp = false`), so this
-script is the only search path. `research` prints Markdown to stdout; quote the
-query so the shell does not split it. The Monid key and `CF_SEARCH_URL` come from
-the box environment (`/root/.profile`) — never pass or print a key.
+   from the sandbox or Cloudflare.
