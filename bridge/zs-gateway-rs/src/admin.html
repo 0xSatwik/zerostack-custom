@@ -138,7 +138,7 @@ table.grid tr.def td{background:#0c0f14}
 .fbrow .n{font-family:var(--mono);font-size:11px;color:var(--mut2);width:18px}
 .fbrow .id{font-family:var(--mono);font-size:12px;flex:1;min-width:0;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
-.switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:12.5px}
+.field label.switch, .switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:12.5px}
 .switch input{display:none}
 .switch .t{width:34px;height:18px;border-radius:10px;background:#222;border:1px solid var(--line2);
   position:relative;transition:background .12s,border-color .12s;flex:0 0 auto}
@@ -164,8 +164,38 @@ table.grid tr.def td{background:#0c0f14}
 .facts code{font-family:var(--mono);font-size:11.5px;color:#b9c6d6}
 @media (max-width:760px){
   .sidebar{display:none}
-  .doc{padding:16px 14px 60px}
-  .field>*{min-width:120px}
+  html,body{overflow-x:hidden}
+  /* menubar: the 5 menu buttons duplicate the actbar — hide them on a phone
+     so the brand + gateway status fit on one line without crowding */
+  .menubar{height:44px;flex:0 0 44px;padding:0 10px;gap:6px}
+  .menubar .menu{display:none}
+  .menubar .brand{padding:0 4px 0 2px}
+  /* actbar stays as the left rail, but every button is a 44px tap target */
+  .actbar{width:56px;flex-basis:56px}
+  .act{min-height:48px;padding:10px 0 8px;font-size:10px}
+  .act .g{font-size:17px}
+  /* every control is thumb-reachable: 44px minimum */
+  button{min-height:44px;padding:10px 14px}
+  button.primary{min-height:44px}
+  input,select,textarea{min-height:44px;padding:10px 10px;font-size:15px}
+  .rowbtns button{min-height:44px;padding:10px 12px}
+  .sidefoot button{min-height:44px}
+  /* fields and cards go full-width, no horizontal overflow */
+  .doc{padding:16px 14px 60px;max-width:100%}
+  .field{flex-direction:column;gap:10px}
+  .field>*{min-width:0;flex:1 1 auto;width:100%}
+  .field.tight{flex-direction:row;flex-wrap:wrap}
+  .field.tight>*{width:auto;flex:0 0 auto}
+  /* wide tables scroll inside their card instead of breaking the page */
+  table.grid{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table.grid thead,table.grid tbody,table.grid tr{display:table;width:100%;table-layout:auto}
+  .tabs{height:44px;flex-basis:44px}
+  .tab{min-height:44px;padding:0 14px}
+  .switch .t{width:44px;height:24px}
+  .switch .t:after{width:18px;height:18px;top:2px;left:2px}
+  .switch input:checked+.t:after{transform:translateX(20px)}
+  .statusbar{height:30px;flex-basis:30px;gap:10px}
+  #toast{bottom:20px;max-width:calc(100vw - 24px);font-size:13px;padding:10px 14px}
 }
 </style>
 </head>
@@ -233,8 +263,7 @@ table.grid tr.def td{background:#0c0f14}
             <p class="hint" style="margin-top:0">The list IS the order. <b style="color:var(--fg)">#1 is the default</b> — every chat uses it first. If it fails and fallback is on, the gateway tries #2, then #3, and so on. Use ↑ Up / ↓ Down to reorder.</p>
             <div class="field tight" style="align-items:center;gap:18px">
               <label class="switch" title="When off, only the default model is used">
-                <input type="checkbox" id="fbToggle" onchange="toggleFallback()"><span class="t"></span>
-                Fallback on failure
+                <input type="checkbox" id="fbToggle" onchange="toggleFallback()"><span class="t"></span><span>Fallback on failure</span>
               </label>
               <span class="hint" style="margin:0">off = only the default · on = try the next model in order</span>
             </div>
@@ -528,8 +557,19 @@ async function unlock(v){
     const r = await fetch("/admin-login", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password: v }) });
     if (r.ok) { const d = await r.json(); TOK = d.token; sessionStorage.setItem("zsgtok", TOK); return loadAll(); }
-  } catch(e){}
-  TOK = v; sessionStorage.setItem("zsgtok", TOK); loadAll();
+    // Login failed: show the real reason instead of silently retrying with
+    // the raw password as a token (that just loops back to this login).
+    let msg = "Wrong password — try again, or log in with the gateway token.";
+    try { const d = await r.json(); if (d && d.error) msg = d.error; } catch(e){}
+    if (r.status === 429) msg = "Too many attempts — wait a few minutes, then try again.";
+    if (r.status === 400) msg = "No opening password is set — log in with the gateway token.";
+    toast(msg, 6000);
+    const err = $("pwgate_err"); if (err) err.textContent = msg;
+    return;
+  } catch(e){
+    toast("Could not reach the gateway — check the connection and try again.", 6000);
+    return;
+  }
 }
 function showLogin(){
   const lc = $("loginCard");
@@ -539,12 +579,13 @@ function showLogin(){
     const d = document.createElement("div");
     d.id = "pwgate";
     d.style.cssText = "position:fixed;inset:0;background:#000;z-index:80;display:flex;align-items:center;justify-content:center";
-    d.innerHTML = '<div style="width:340px;border:1px solid #262626;border-radius:6px;padding:22px;background:#080808">' +
+    d.innerHTML = '<div style="width:min(340px,calc(100vw - 32px));border:1px solid #262626;border-radius:6px;padding:22px;background:#080808">' +
       '<div class="mono" style="font-size:11px;letter-spacing:.14em;color:#8a8a8a;margin-bottom:12px">ZEROSTACK ADMIN</div>' +
       '<div style="height:1px;background:#1c1c1c;margin-bottom:14px"></div>' +
       '<label style="font-size:11px;color:#8a8a8a;font-family:ui-monospace,monospace;display:block;margin-bottom:5px">Opening password</label>' +
-      '<input id="pwgate_in" type="password" placeholder="password or gateway token" autocomplete="current-password" style="width:100%;background:#0d0d0d;border:1px solid #262626;border-radius:4px;color:#e8e8e8;padding:6px 9px;font:13px ui-monospace,monospace;outline:none">' +
-      '<button id="pwgate_btn" style="margin-top:10px;width:100%;background:#4c8dff;color:#000;border:1px solid #4c8dff;border-radius:4px;padding:6px;font:600 13px system-ui;cursor:pointer">Unlock</button>' +
+      '<input id="pwgate_in" type="password" placeholder="password or gateway token" autocomplete="current-password" style="width:100%;background:#0d0d0d;border:1px solid #262626;border-radius:4px;color:#e8e8e8;padding:12px 10px;font:15px ui-monospace,monospace;outline:none;min-height:44px">' +
+      '<button id="pwgate_btn" style="margin-top:12px;width:100%;background:#4c8dff;color:#000;border:1px solid #4c8dff;border-radius:4px;padding:12px 6px;min-height:44px;font:600 15px system-ui;cursor:pointer">Unlock</button>' +
+      '<div id="pwgate_err" style="margin-top:10px;min-height:16px;color:#ff6b6b;font-size:12px"></div>' +
       '<div style="font-size:11px;color:#5f5f5f;margin-top:10px;line-height:1.5">Your opening password, or the gateway token.</div></div>';
     document.body.appendChild(d);
     $("pwgate_btn").onclick = async () => {
@@ -561,6 +602,7 @@ function showLogin(){
 
 /* ---------- load ---------- */
 async function loadAll(){
+  for (let attempt = 0; attempt < 2; attempt++) {
   try {
     const [health, ms, keys, instabox, monid] = await Promise.all([
       api("/health"), api("/model-system"), api("/keys"), api("/instabox-key"), api("/monid")]);
@@ -585,11 +627,13 @@ async function loadAll(){
     $("monidBadge").textContent = monid.set ? "set" : "not set";
     $("monidBadge").className = "pill " + (monid.set ? "ok" : "no");
   } catch(e){
+    if (attempt === 0) { await new Promise(r => setTimeout(r, 1200)); continue; }
     LOADED = null;
     $("gdot").className = "dot bad";
     $("sdot").className = "dot bad";
     showLogin();
     if (TOK) toast(e.message);
+  }
   }
 }
 
@@ -879,6 +923,9 @@ document.addEventListener("click", async e => {
 let PROV_TICKED = [];
 let PROV_TICK_PROVIDER = "";
 async function loadProvModels(name){
+  // The tick panel lives in the Models pane only — switch there first, or
+  // the user clicks Load models in the Providers pane and sees nothing.
+  show("models");
   const wrap = $("provTickWrap");
   const label = $("provTickLabel");
   if (label) label.textContent = "Loading " + name + "…";
@@ -1002,7 +1049,7 @@ async function setMonid(){
   } catch(e){ toast(e.message); }
 }
 async function setAdminPw(){
-  const v = $("admin_pw").value;
+  const v = $("admin_pw").value.trim();
   if (v.length < 6){ toast("password must be at least 6 characters"); return; }
   try {
     await api("/admin-password", { method: "POST", body: JSON.stringify({ password: v }) });
