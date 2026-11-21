@@ -129,6 +129,8 @@ table.grid tr.def td{background:#0c0f14}
   background:#0a0a0a;padding:6px}
 .tick{display:flex;align-items:center;gap:8px;padding:3px 6px;border-radius:3px;font-family:var(--mono);
   font-size:12px;cursor:pointer}
+.chk{display:inline-flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;color:var(--fg)}
+.chk input{width:auto;margin:0;accent-color:var(--ac);min-height:16px}
 .tick:hover{background:#131313}
 .tick input{width:auto;margin:0;accent-color:var(--ac)}
 .tick .c{color:var(--mut2);font-size:11px;margin-left:auto}
@@ -420,6 +422,29 @@ table.grid tr.def td{background:#0c0f14}
             </div>
             <p class="hint">Combined search inside the server (TinyFish free + cf-search Worker).</p>
           </div>
+          <div class="sec">
+            <h2>Web search — worker URLs</h2>
+            <p class="hint">The search workers are YOUR deployments. Paste each Worker URL here — no URL is stored in code. Empty means that leg is skipped.</p>
+            <div class="field">
+              <div><label for="fx_url">fixtweet worker URL (X / social)</label>
+                <input id="fx_url" class="mono" placeholder="https://fixtweet.<sub>.workers.dev"></div>
+            </div>
+            <div class="field">
+              <div><label for="fx_url2">fixtweet worker URL 2 — failover (optional)</label>
+                <input id="fx_url2" class="mono" placeholder="https://fixtweet-2.<sub>.workers.dev"></div>
+            </div>
+            <div class="field">
+              <div><label for="cf_url">cf-search worker URL (Bing)</label>
+                <input id="cf_url" class="mono" placeholder="https://cf-search.<sub>.workers.dev"></div>
+            </div>
+            <div class="field tight" style="align-items:center">
+              <label class="chk"><input type="checkbox" id="tg_tinyfish"> TinyFish</label>
+              <label class="chk"><input type="checkbox" id="tg_bing"> Bing</label>
+              <label class="chk"><input type="checkbox" id="tg_x"> X / social</label>
+              <div style="flex:0 0 auto"><button onclick="saveSearch()">Save search settings</button></div>
+            </div>
+            <p class="hint">fixtweet worker: X/Twitter, Bluesky, TikTok, Instagram, Threads, Mastodon — no key. Endpoints: /ai/2/ask (one-shot pack), /api/2/search (JSON walk), /ai/2/post?url=. Full manual: the worker's /llms.txt. cf-search worker: Bing web/images/videos/news via /search. Full manual: the worker's /llm.txt.</p>
+          </div>
         </div>
       </section>
 
@@ -604,8 +629,8 @@ function showLogin(){
 async function loadAll(){
   for (let attempt = 0; attempt < 2; attempt++) {
   try {
-    const [health, ms, keys, instabox, monid] = await Promise.all([
-      api("/health"), api("/model-system"), api("/keys"), api("/instabox-key"), api("/monid")]);
+    const [health, ms, keys, instabox, monid, sinfo] = await Promise.all([
+      api("/health"), api("/model-system"), api("/keys"), api("/instabox-key"), api("/monid"), api("/settings-info")]);
     LOADED = true;
     const gate = $("pwgate"); if (gate) gate.remove();
     const lc = $("loginCard"); if (lc) lc.style.display = "none";
@@ -626,6 +651,14 @@ async function loadAll(){
     $("instaboxBadge").className = "pill " + (instabox.set ? "ok" : "no");
     $("monidBadge").textContent = monid.set ? "set" : "not set";
     $("monidBadge").className = "pill " + (monid.set ? "ok" : "no");
+    // Web search settings (worker URLs + leg toggles) from /settings-info.
+    const sc = (sinfo && sinfo.search) || {};
+    if ($("fx_url")) $("fx_url").value = sc.fxembed_url || "";
+    if ($("fx_url2")) $("fx_url2").value = sc.fxembed_url_2 || "";
+    if ($("cf_url")) $("cf_url").value = sc.cf_search_url || "";
+    if ($("tg_tinyfish")) $("tg_tinyfish").checked = sc.tinyfish !== false;
+    if ($("tg_bing")) $("tg_bing").checked = sc.bing !== false;
+    if ($("tg_x")) $("tg_x").checked = sc.x !== false;
   } catch(e){
     if (attempt === 0) { await new Promise(r => setTimeout(r, 1200)); continue; }
     LOADED = null;
@@ -1046,6 +1079,20 @@ async function setMonid(){
   try {
     await api("/monid", { method: "POST", body: JSON.stringify({ key: v }) });
     $("monid_key").value = ""; loadAll(); toast("Monid key saved on the box");
+  } catch(e){ toast(e.message); }
+}
+async function saveSearch(){
+  const body = {
+    fxembed_url: ($("fx_url").value || "").trim(),
+    fxembed_url_2: ($("fx_url2").value || "").trim(),
+    cf_search_url: ($("cf_url").value || "").trim(),
+    tinyfish: $("tg_tinyfish").checked,
+    bing: $("tg_bing").checked,
+    x: $("tg_x").checked,
+  };
+  try {
+    await api("/search-settings", { method: "POST", body: JSON.stringify(body) });
+    loadAll(); toast("Search settings saved — web.py reads them from search.json");
   } catch(e){ toast(e.message); }
 }
 async function setAdminPw(){
