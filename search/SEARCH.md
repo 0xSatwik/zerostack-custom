@@ -6,8 +6,8 @@ Muse and Pi ALWAYS use this system. No other search/fetch path.
 1. **TinyFish free search** via Monid API — `tinyfish /free/search`
    ($0, 12,000/day, 30/min). Primary web search.
 2. **cf-search Worker (Bing)** — no key, free. Second web leg (added
-   2026-11-19). `https://cf-search.akamithun-search.workers.dev/search`
-   (override with `CF_SEARCH_URL`). Plain text, one line per result.
+   2026-11-19). Set `CF_SEARCH_URL` to YOUR Worker URL — Muse asks you
+   for it during setup; it is never hardcoded. Plain text, one line per result.
    Country-wise filtering works; pagination does NOT work for web/news.
    Google News and DuckDuckGo do NOT work from Cloudflare's network.
    Full docs: `docs/SEARCH-WORKER.md`.
