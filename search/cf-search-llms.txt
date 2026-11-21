@@ -4,7 +4,7 @@ A search-only Cloudflare Worker that returns Bing web/image/video/news
 results as clean plain text. Built for AI agents (Pi, Muse) that need
 fast, free, filterable search without an API key.
 
-- Live URL: https://cf-search.akamithun-search.workers.dev
+- Live URL: https://<your-worker>.<your-subdomain>.workers.dev (YOUR Worker URL — Muse asks you for it; never hardcoded)
 - Health: GET /health returns one line: ok cf-search web images videos news
 - Docs: GET /llms.txt (this file) or GET /llm.txt (identical).
 - No auth, no key, no sign-in. Free tier Worker. Source: cf-search-worker/
