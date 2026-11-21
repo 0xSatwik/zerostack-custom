@@ -204,7 +204,15 @@ fn push_block(st: &mut State, kind: &str, text: &str) {
             return;
         }
     }
-    content.push(json!({ kind: text }));
+    // Store the block WITH its type field. Without "type", the frontend
+    // drops text blocks (it matches on b.type === "text") and only the
+    // thinking block renders — the user sees "thinking" and no answer.
+    // The type field also makes the merge above work (it compares
+    // last.type to kind), so consecutive deltas collapse into one block.
+    let mut m = serde_json::Map::new();
+    m.insert("type".to_string(), json!(kind));
+    m.insert(kind.to_string(), json!(text));
+    content.push(serde_json::Value::Object(m));
 }
 
 // ---- ports ----------------------------------------------------------------
