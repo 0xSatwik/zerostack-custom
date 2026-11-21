@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Settings — Zerostack</title>
+<style>
+:root{--bg:#0b0b0b;--card:#111;--bd:#262626;--fg:#e8e8e8;--mut:#9a9a9a;--mut2:#6a6a6a;--ac:#4c8dff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.55 system-ui,-apple-system,sans-serif}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--bd);padding:12px 20px;display:flex;align-items:center;gap:16px;z-index:5}
+header h1{font-size:17px;margin:0;letter-spacing:-.2px}
+header nav{margin-left:auto;display:flex;gap:6px}
+header nav a{color:var(--fg);background:var(--card);border:1px solid var(--bd);border-radius:6px;padding:5px 10px;font-size:13px}
+header nav a:hover{border-color:var(--ac);text-decoration:none}
+main{max-width:680px;margin:0 auto;padding:24px 20px 60px}
+main>p.sub{color:var(--mut);margin:4px 0 0;font-size:13px}
+h2{font-size:12px;margin:26px 0 8px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+.kv{display:flex;justify-content:space-between;gap:14px;padding:7px 0;border-bottom:1px solid var(--bd);font-size:13.5px}
+.kv b{font-weight:600;flex:none}
+.kv span{color:var(--mut);text-align:right;word-break:break-all}
+.note{font-size:12.5px;color:var(--mut2);margin-top:8px;line-height:1.6}
+.skillrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--bd);font-size:13.5px}
+.skillrow .d{color:var(--mut2);font-size:12px}
+button{font:600 13px system-ui;cursor:pointer;border:1px solid var(--bd);background:var(--card);color:var(--fg);border-radius:6px;padding:5px 12px}
+button:hover{border-color:var(--ac)}
+button.primary{background:var(--ac);border-color:var(--ac);color:#000}
+#login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:60;padding:20px}
+#login .box{width:100%;max-width:390px;background:var(--card);border:1px solid var(--bd);border-radius:18px;padding:26px}
+#login h1{font-size:20px;margin:0 0 4px}
+#login p{color:var(--mut);font-size:13px;margin:0 0 18px}
+#login input{width:100%;background:#0d0d0d;border:1px solid var(--bd);border-radius:6px;color:var(--fg);padding:8px 10px;font:13px ui-monospace,monospace;outline:none}
+#login .err{color:#ff6b6b;font-size:12px;margin-top:10px;min-height:16px}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#1c1c1c;border:1px solid var(--bd);color:var(--fg);padding:8px 14px;border-radius:8px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:80;max-width:90vw}
+#toast.on{opacity:1}
+</style>
+</head>
+<body>
+<div id="login">
+  <div class="box">
+    <h1>Settings</h1>
+    <p>Unlock with your opening password or the gateway token.</p>
+    <div style="display:flex;gap:8px">
+      <input id="pw" type="password" placeholder="Opening password" autocomplete="current-password">
+      <button class="primary" onclick="doLogin()">Unlock</button>
+    </div>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<header>
+  <h1>Settings</h1>
+  <nav>
+    <a href="/pi">← Chat</a>
+    <a href="/admin">Admin</a>
+    <a href="/browser">Browser</a>
+  </nav>
+</header>
+<main>
+  <p class="sub">What this Zerostack actually has — skills, MCP, ACP, vault.</p>
+  <div id="body"><p style="color:var(--mut2)">Loading…</p></div>
+</main>
+<div id="toast"></div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let TOK = sessionStorage.getItem("zsgtok") || "";
+let toastT;
+function toast(m, ms){ const t = $("toast"); t.textContent = m; t.classList.add("on"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("on"), ms || 3500); }
+async function api(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({ "Authorization": "Bearer " + TOK, "Content-Type": "application/json" }, opts.headers || {});
+  const r = await fetch(path, opts);
+  let d = {};
+  try { d = await r.json(); } catch(e){}
+  if (r.status === 401) throw new Error("bad token");
+  if (!r.ok) throw new Error((d && d.error) || ("HTTP " + r.status));
+  return d;
+}
+async function doLogin(){
+  const v = $("pw").value.trim(); if (!v) return;
+  if (/^[0-9a-f]{43}$/i.test(v)) { TOK = v; sessionStorage.setItem("zsgtok", TOK); return boot(); }
+  try {
+    const r = await fetch("/admin-login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: v }) });
+    if (r.ok) { const d = await r.json(); TOK = d.token; sessionStorage.setItem("zsgtok", TOK); return boot(); }
+    let msg = "Wrong password — try again, or log in with the gateway token.";
+    try { const d = await r.json(); if (d && d.error) msg = d.error; } catch(e){}
+    if (r.status === 429) msg = "Too many attempts — wait a few minutes, then try again.";
+    if (r.status === 400) msg = "No opening password is set — log in with the gateway token.";
+    $("loginErr").textContent = msg;
+  } catch(e){ $("loginErr").textContent = "Could not reach the gateway — check the connection and try again."; }
+}
+function kv(k, v){ return '<div class="kv"><b>' + esc(k) + '</b><span>' + esc(v == null ? "" : String(v)) + '</span></div>'; }
+async function load(){
+  const body = $("body");
+  try {
+    const d = await api("/settings-info");
+    let h = "";
+    h += "<h2>Zerostack</h2>";
+    h += kv("Version", d.zerostack_version || "—");
+    h += kv("Binary", d.zerostack_bin || "—");
+    h += kv("Config", d.config_path || "—");
+    h += kv("Gateway", (d.gateway_impl || "rust") + " · pid " + (d.gateway_pid || "—"));
+    h += kv("Sessions running", String(d.sessions_running ?? "—"));
+    h += kv("ACP", d.acp || "gateway talks to Zerostack over ACP; the gateway owns transcripts");
+    h += "<h2>Skills</h2>";
+    if (d.skills && d.skills.length) {
+      d.skills.forEach(s => {
+        h += '<div class="skillrow"><span><b>' + esc(s.name) + '</b> <span class="d">' + esc(s.desc || "") + '</span></span><button onclick="loadSkill(\'' + esc(s.name).replace(/'/g, "\\'") + '\')">Load</button></div>';
+      });
+      h += '<div class="note">Load opens the chat with <span class="mono">/prompt &lt;skill&gt;</span> already typed — press Send to load that skill for the next message.</div>';
+    } else {
+      h += '<div class="note">No skills installed.</div>';
+    }
+    h += "<h2>MCP servers</h2>";
+    if (d.mcp && d.mcp.length) {
+      d.mcp.forEach(m => {
+        h += kv(m.name, (m.url || m.command || "") + (m.note ? " — " + m.note : ""));
+      });
+      h += '<div class="note">MCP servers work in the Zerostack terminal (TUI) only. The gateway runs Zerostack in ACP mode, and ACP never loads MCP servers — so the chat here cannot call MCP tools directly. Use the Browser button instead.</div>';
+    } else {
+      h += '<div class="note">No MCP servers configured.</div>';
+    }
+    h += "<h2>Vault</h2>";
+    h += kv("Worker", d.vault_url || "—");
+    h += kv("Agent", d.vault_agent || "—");
+    h += kv("Status", d.vault_status || "—");
+    if (d.vault_keys && d.vault_keys.length) h += kv("Keys", d.vault_keys.join(", "));
+    h += '<div class="note">The vault holds API keys so no agent ever sees one. Unlocking needs the master secret, which only Muse holds — ask Muse to unlock it for a service, then the Zerostack terminal can use the vault tools. The chat here cannot call vault tools (ACP has no MCP).</div>';
+    body.innerHTML = h;
+  } catch(e){
+    body.innerHTML = '<p style="color:#ff6b6b">Could not load settings: ' + esc(e.message) + '</p><p class="note">If it says "bad token", log in again — your saved token may have expired.</p>';
+  }
+}
+function loadSkill(name){
+  sessionStorage.setItem("zsSkill", name);
+  location.href = "/pi";
+}
+function boot(){
+  $("login").style.display = "none";
+  load();
+}
+$("pw").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
+if (TOK) boot();
+</script>
+</body>
+</html>
