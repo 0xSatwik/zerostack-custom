@@ -31,14 +31,19 @@ cf-search Worker (Bing, no key):
   work from Cloudflare's network (503 / 202 bot-challenge). Bing only.
   Full docs: search/cf-search-llms.txt (in this repo).
 
-X / social (FxEmbed, no key, UA mandatory):
-  base https://fixtweet.twapiworker.workers.dev (clone fixtweet-2...)
+X / social (fixtweet worker, no key, UA mandatory):
+  The worker URL is NEVER hardcoded — the user sets it in /admin
+  (Web search settings) and it is stored in search.json next to this
+  file (or $FXEMBED_WORKER_URL). If it is empty, the X leg is skipped.
   /ai/2/ask?q=&pages=N (max 8) — one merged Markdown pack, best for X search
   /api/2/search?q=&feed=latest|top|media&count=&cursor= — JSON, cursor.bottom walks
   /ai/2/status/{id} /thread/{id} /profile/{handle} /profile/{handle}/statuses
   /ai/2/post?url=<any X/Bsky/TikTok/IG/Threads/Mastodon post or profile URL>
+  /ai/2/trends — X trends
   500 during a walk = retry same cursor after ~30s; 404 = exhausted.
-  Full manual: https://fixtweet.twapiworker.workers.dev/llms.txt
+  Two bases exist (fixtweet + fixtweet-2, identical clones) — set the
+  second URL in settings too for failover. Full manual: the worker's
+  /llms.txt (e.g. https://fixtweet.twapiworker.workers.dev/llms.txt).
 
 Combined research (maximum URLs + data):
   research = TinyFish search + cf-search Worker (dedup URLs)
@@ -59,13 +64,30 @@ import argparse, json, os, re, subprocess, sys, time, urllib.parse, urllib.reque
 
 MONID_API = "https://api.monid.ai"
 CONFIG = os.path.expanduser("~/.config/monid/credentials.yaml")
-FX = "https://fixtweet.twapiworker.workers.dev"
-FX2 = "https://fixtweet-2.twapiworker.workers.dev"
-CF_SEARCH_URL = os.environ.get("CF_SEARCH_URL", "")
-# The cf-search Worker URL is NEVER hardcoded here — it is the user's own
-# Worker, deployed from docs/SEARCH-WORKER.md. Muse ASKS the user for their
-# Worker URL during setup and sets CF_SEARCH_URL (env export). If it is
-# empty, the cf-search leg is skipped and TinyFish + X still work.
+
+# ---- Worker URLs: NEVER hardcoded. The user sets them in /admin
+# (Web search settings); they are stored in search.json next to this
+# file. Env vars override the file. Empty = that leg is skipped. ----
+def _load_search_settings():
+    settings = {}
+    for path in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "search.json"),
+                 "/root/pi-bridge/search.json"):
+        try:
+            with open(path) as f:
+                settings = json.load(f)
+            break
+        except Exception:
+            continue
+    return settings if isinstance(settings, dict) else {}
+
+_SETTINGS = _load_search_settings()
+# fixtweet worker (X/social). Primary + optional second base (failover).
+FX = os.environ.get("FXEMBED_WORKER_URL") or _SETTINGS.get("fxembed_url", "")
+FX2 = os.environ.get("FXEMBED_WORKER_URL_2") or _SETTINGS.get("fxembed_url_2", "")
+# cf-search Worker (Bing). The user's own Worker URL.
+CF_SEARCH_URL = os.environ.get("CF_SEARCH_URL") or _SETTINGS.get("cf_search_url", "")
+# If a leg's URL is empty, that leg is skipped and TinyFish + the other
+# legs still work. No URL is ever written literally in this file.
 UA = {"User-Agent": "Muse/1.0"}
 
 
@@ -165,10 +187,17 @@ def curl_fetch(url):
     return r.stdout if r.returncode == 0 else ""
 
 
-# ---- X / social via FxEmbed (no key, UA mandatory) ----
+# ---- X / social via fixtweet worker (no key, UA mandatory) ----
 
-def fx_get(path, base=FX):
-    req = urllib.request.Request(base + path, headers=UA)
+def fx_get(path, base=None):
+    """GET a path on the fixtweet worker. Returns text or None.
+    Skipped (None) when no worker URL is configured. On a flaky
+    empty/404, retries once on the second base if one is set."""
+    if base is None:
+        base = FX
+    if not base:
+        return None
+    req = urllib.request.Request(base.rstrip("/") + path, headers=UA)
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             return r.read().decode(errors="replace")
@@ -176,19 +205,26 @@ def fx_get(path, base=FX):
         if e.code == 404:
             return None
         # flaky guest answers: retry once on the other base
-        if base == FX:
+        if base == FX and FX2 and FX2 != FX:
             return fx_get(path, base=FX2)
         raise
 
 
 def x_search(query, pages=2, feed="latest"):
-    """One-shot X pack: /ai/2/ask walks N pages server-side, returns Markdown."""
+    """One-shot X pack: /ai/2/ask walks N pages server-side, returns Markdown.
+    Skipped (None) when no fixtweet worker URL is configured."""
+    if not FX:
+        print("[x] skipped: no fixtweet worker URL set (set it in /admin Web search settings)", file=sys.stderr)
+        return None
     q = urllib.parse.quote(query)
     return fx_get(f"/ai/2/ask?q={q}&pages={max(1, min(8, pages))}")
 
 
 def x_search_json(query, count=30, feed="latest", max_pages=3):
-    """JSON walk: follow cursor.bottom until exhausted / max_pages. 500 = retry same cursor."""
+    """JSON walk: follow cursor.bottom until exhausted / max_pages. 500 = retry same cursor.
+    Skipped ([]) when no fixtweet worker URL is configured."""
+    if not FX:
+        return []
     out, cursor, seen = [], None, set()
     for _ in range(max_pages):
         qs = f"/api/2/search?q={urllib.parse.quote(query)}&feed={feed}&count={count}"
