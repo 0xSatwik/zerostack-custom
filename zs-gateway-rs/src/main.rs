@@ -296,6 +296,8 @@ fn search_cfg() -> Value {
     let on = |k: &str, d: bool| v.get(k).and_then(|x| x.as_bool()).unwrap_or(d);
     json!({
         "cf_search_url": v.get("cf_search_url").and_then(|x| x.as_str()).unwrap_or(""),
+        "fxembed_url": v.get("fxembed_url").and_then(|x| x.as_str()).unwrap_or(""),
+        "fxembed_url_2": v.get("fxembed_url_2").and_then(|x| x.as_str()).unwrap_or(""),
         "tinyfish": on("tinyfish", true),
         "bing": on("bing", true),
         "x": on("x", true),
@@ -312,6 +314,18 @@ fn save_search_cfg(b: &Value) -> Result<Value, String> {
                     .to_string()
             })?,
         });
+    }
+    // fixtweet worker (X/social). Same Worker-URL shape; empty clears it.
+    // The second URL is the failover base (e.g. the -2 clone).
+    for k in ["fxembed_url", "fxembed_url_2"] {
+        if let Some(raw) = b.get(k).and_then(|v| v.as_str()) {
+            cur[k] = json!(match raw.trim() {
+                "" => String::new(),
+                s => clean_worker_url(s).ok_or_else(|| {
+                    format!("the {} is not a Worker URL — it should look like https://<name>.<sub>.workers.dev", k)
+                })?,
+            });
+        }
     }
     for k in ["tinyfish", "bing", "x"] {
         if let Some(v) = b.get(k).and_then(|v| v.as_bool()) {
