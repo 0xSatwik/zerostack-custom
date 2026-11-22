@@ -392,7 +392,13 @@ const set = (el, html) => {
 };
 const shortId = id => String(id || "").replace(/^.*_/, "").slice(0, 8);
 
-let TOK = sessionStorage.getItem("zstok") || "";
+// One shared login for /pi, /pi/settings and /admin: the gateway token
+// lives in localStorage under "zsgtok" (shared across tabs, survives tab
+// closes). Falls back to the old sessionStorage keys for tokens saved
+// before this change.
+function getTok(){ try { return localStorage.getItem("zsgtok") || sessionStorage.getItem("zsgtok") || sessionStorage.getItem("zstok") || ""; } catch(e){ return ""; } }
+function saveTok(t){ try { localStorage.setItem("zsgtok", t); } catch(e){} }
+let TOK = getTok();
 let SESS = [], CUR = null, MSGS = [], STATS = null;
 let MODELS = [], PENDING_MODEL = "";
 let evCursor = 0, evTimer = null, listTimer = null, statsTimer = null;
@@ -444,7 +450,7 @@ async function doLogin() {
   // directly (admin-parity-2026-11-20). Trying it as a password first
   // would burn a lockout try and can never succeed until an opening
   // password is set on the Admin page.
-  if (/^[0-9a-f]{43}$/i.test(v)) { TOK = v; sessionStorage.setItem("zstok", TOK); return boot(); }
+  if (/^[0-9a-f]{43}$/i.test(v)) { TOK = v; saveTok(TOK); return boot(); }
   try {
     const r = await fetch("/admin-login", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -453,12 +459,12 @@ async function doLogin() {
     if (r.ok) {
       const d = await r.json();
       TOK = d.token;
-      sessionStorage.setItem("zstok", TOK);
+      saveTok(TOK);
       return boot();
     }
   } catch (e) {}
   // raw gateway token fallback (same as /admin)
-  TOK = v; sessionStorage.setItem("zstok", TOK); boot();
+  TOK = v; saveTok(TOK); boot();
 }
 $("pw").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
 
