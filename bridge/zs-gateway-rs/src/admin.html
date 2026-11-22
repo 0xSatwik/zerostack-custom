@@ -540,7 +540,13 @@ const set = (el, html) => {
   el.replaceChildren(frag);
 };
 
-let TOK = sessionStorage.getItem("zsgtok") || "";
+// One shared login for /pi, /pi/settings and /admin: the gateway token
+// lives in localStorage under "zsgtok" (shared across tabs, survives tab
+// closes). Falls back to the old sessionStorage keys for tokens saved
+// before this change.
+function getTok(){ try { return localStorage.getItem("zsgtok") || sessionStorage.getItem("zsgtok") || sessionStorage.getItem("zstok") || ""; } catch(e){ return ""; } }
+function saveTok(t){ try { localStorage.setItem("zsgtok", t); } catch(e){} }
+let TOK = getTok();
 let MS = { providers: [], models: [], order: [], default: "", fallback_enabled: true };
 let LOADED = null;
 
@@ -577,11 +583,11 @@ async function saveTok(){
 }
 async function unlock(v){
   if (!v) return;
-  if (/^[0-9a-f]{43}$/i.test(v)) { TOK = v; sessionStorage.setItem("zsgtok", TOK); return loadAll(); }
+  if (/^[0-9a-f]{43}$/i.test(v)) { TOK = v; saveTok(TOK); return loadAll(); }
   try {
     const r = await fetch("/admin-login", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password: v }) });
-    if (r.ok) { const d = await r.json(); TOK = d.token; sessionStorage.setItem("zsgtok", TOK); return loadAll(); }
+    if (r.ok) { const d = await r.json(); TOK = d.token; saveTok(TOK); return loadAll(); }
     // Login failed: show the real reason instead of silently retrying with
     // the raw password as a token (that just loops back to this login).
     let msg = "Wrong password — try again, or log in with the gateway token.";
