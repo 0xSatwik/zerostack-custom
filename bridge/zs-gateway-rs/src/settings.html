@@ -67,7 +67,13 @@ button.primary{background:var(--ac);border-color:var(--ac);color:#000}
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-let TOK = sessionStorage.getItem("zsgtok") || "";
+// One shared login for /pi, /pi/settings and /admin: the gateway token
+// lives in localStorage under "zsgtok" (shared across tabs, survives tab
+// closes). Falls back to the old sessionStorage keys for tokens saved
+// before this change.
+function getTok(){ try { return localStorage.getItem("zsgtok") || sessionStorage.getItem("zsgtok") || sessionStorage.getItem("zstok") || ""; } catch(e){ return ""; } }
+function saveTok(t){ try { localStorage.setItem("zsgtok", t); } catch(e){} }
+let TOK = getTok();
 let toastT;
 function toast(m, ms){ const t = $("toast"); t.textContent = m; t.classList.add("on"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("on"), ms || 3500); }
 async function api(path, opts){
@@ -82,10 +88,10 @@ async function api(path, opts){
 }
 async function doLogin(){
   const v = $("pw").value.trim(); if (!v) return;
-  if (/^[0-9a-f]{43}$/i.test(v)) { TOK = v; sessionStorage.setItem("zsgtok", TOK); return boot(); }
+  if (/^[0-9a-f]{43}$/i.test(v)) { TOK = v; saveTok(TOK); return boot(); }
   try {
     const r = await fetch("/admin-login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: v }) });
-    if (r.ok) { const d = await r.json(); TOK = d.token; sessionStorage.setItem("zsgtok", TOK); return boot(); }
+    if (r.ok) { const d = await r.json(); TOK = d.token; saveTok(TOK); return boot(); }
     let msg = "Wrong password — try again, or log in with the gateway token.";
     try { const d = await r.json(); if (d && d.error) msg = d.error; } catch(e){}
     if (r.status === 429) msg = "Too many attempts — wait a few minutes, then try again.";
