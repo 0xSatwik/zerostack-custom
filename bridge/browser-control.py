@@ -82,7 +82,7 @@ button{width:100%;margin-top:12px;background:#2563eb;color:#fff;border:0;border-
 </style></head><body><div class="card">
 <h1>Browser login</h1>
 <p class="mut">Enter the same gateway token (or opening password) you use for Chat and Admin.</p>
-<form method="post" action="/login"><input type="password" name="password" placeholder="Gateway token" autofocus>
+<form method="post" action="/browser/login"><input type="password" name="password" placeholder="Gateway token" autofocus>
 <button type="submit">Unlock browser</button></form>
 <div class="err">__ERR__</div>
 </div></body></html>"""
@@ -110,7 +110,7 @@ iframe{border:0;width:100vw;height:calc(100vh - 52px);display:block;background:#
 async function act(a){
   document.getElementById('status').textContent = a + '...';
   try{
-    const r = await fetch('/'+a,{method:'POST'});
+    const r = await fetch('/browser/'+a,{method:'POST'});
     const j = await r.json();
     document.getElementById('status').textContent = j.ok ? (a+' ok') : ('error: '+(j.error||''));
     if(a==='stop'){ document.getElementById('v').src='about:blank'; }
@@ -150,6 +150,11 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        # The tunnel forwards the FULL path, so via /browser the paths
+        # arrive as /browser, /browser/status, ... — strip that prefix
+        # so the same handlers work both via the tunnel and direct.
+        if path.startswith("/browser"):
+            path = path[len("/browser"):] or "/"
         if path in ("/", "/index.html", "/browser", "/browser/"):
             if not _authed(self):
                 return self._send(200, LOGIN_PAGE.replace("__ERR__", ""), "text/html")
@@ -158,7 +163,7 @@ class H(BaseHTTPRequestHandler):
             if not _authed(self):
                 return self._send(401, json.dumps({"ok": False, "error": "unauthorized"}))
             out = subprocess.run(
-                ["bash", "-c", "ss -tln 2>/dev/null | grep -E '8931|9223' | wc -l"],
+                ["bash", "-c", "ss -tln 2>/dev/null | grep -E '9377' | wc -l"],
                 capture_output=True, text=True)
             return self._send(200, json.dumps(
                 {"ok": True, "stack_ports_up": int(out.stdout.strip() or 0)}))
@@ -166,6 +171,9 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p = urlparse(self.path).path
+        # Same /browser prefix strip as do_GET (tunnel forwards full path).
+        if p.startswith("/browser"):
+            p = p[len("/browser"):] or "/"
         if p == "/login":
             body = self._body()
             pw = (body.get("password") or "").strip()
