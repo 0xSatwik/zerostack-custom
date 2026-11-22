@@ -82,6 +82,7 @@ config, and live box state. Our binary is stock upstream 1.8.6 + 9 edited prompt
 - **Fetch rule:** fetch **always uses Monid** for web research. If Monid fetch gets blocked/fails, fall back to the **Camoufox browser** (Instabox, port 9377) to fetch the page. The web research search leg itself is the 34-source Apify actor when Apify is the selected backend; otherwise Monid/Bing as today.
 - **Skill:** update the web-research skill (`~/workspace/custom-skills/web-research/SKILL.md`, repo `skills/web-research.md`, box prompt) with the backend selector, the Apify key → actor flow, the Reddit leg, and the fetch Monid → Camoufox fallback — so the agent (and the user reading the skill) understands how it all works. No hardcoded actor IDs or keys in the skill.
 - **Effort:** medium-large (gateway settings + search.json schema + web.py backend switch + Reddit leg + fetch fallback + /admin UI + skill). Build after the actor endpoint details are confirmed from the actor pages.
+- **Completion rule (user, 2026-11-22):** once all the task.md items for this work are done, update GitHub with ALL the files — code, settings, skill, and the guide too (README / setup docs updated to explain the new backend selector, Apify key → actor setup, Reddit leg, and fetch fallback). Nothing stays local-only.
 
 ## SKIP / DEFER
 
