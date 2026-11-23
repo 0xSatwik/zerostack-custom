@@ -43,6 +43,8 @@ pub struct State {
     pub needs_preamble: bool,
     pub turn: Option<Value>,
     pub proc: Option<Child>,
+    /// provider-keys.env slot the running process was spawned with (rotation)
+    pub key_env: Option<String>,
     pub port: Option<u16>,
     pub conn: Option<Arc<Conn>>,
     pub acp_sid: Option<String>,
@@ -138,6 +140,7 @@ pub fn new_session(cwd: &str, model: &str, name: &str) -> Arc<Session> {
             needs_preamble: false,
             turn: None,
             proc: None,
+            key_env: None,
             port: None,
             conn: None,
             acp_sid: None,
@@ -446,18 +449,26 @@ fn spawn_proc(s: &Arc<Session>, forced_model: &str) -> Result<(), String> {
         cmd.stderr(Stdio::from(f));
     }
 
-    // Key rotation: point the provider's api_key_env at the next key for this
-    // spawn, round-robin, counter persisted in key-rotation.json.
+    // Key rotation: point the provider's api_key_env at the next HEALTHY key
+    // for this spawn, round-robin, counter persisted in key-rotation.json.
+    // Cooling / flagged keys are skipped; if none is left the spawn fails
+    // loudly instead of silently burning a dead key.
+    let mut used_key: Option<String> = None;
     if let Some(prov) = &provider {
         let reg = models::registry();
         if let Some(p) = reg.provider(prov) {
             let base = p.get("api_key_env").and_then(|v| v.as_str()).unwrap_or("").to_string();
             if !base.is_empty() {
                 let keys = models::provider_keys(&base);
-                if let Some(pick) = models::rotation_next(prov, &keys) {
-                    if let Some(val) = models::key_value(&pick) {
-                        cmd.env(&base, val);
+                match models::rotation_pick(prov, &keys) {
+                    Ok(Some(pick)) => {
+                        if let Some(val) = models::key_value(&pick) {
+                            cmd.env(&base, val);
+                            used_key = Some(pick);
+                        }
                     }
+                    Ok(None) => {}
+                    Err(e) => return Err(e),
                 }
             }
         }
@@ -509,6 +520,7 @@ fn spawn_proc(s: &Arc<Session>, forced_model: &str) -> Result<(), String> {
         st.port = Some(port);
         st.conn = Some(conn.clone());
         st.acp_sid = None;
+        st.key_env = used_key.clone();
         if !st.messages.is_empty() {
             st.needs_preamble = true;
         }
@@ -543,6 +555,7 @@ pub fn kill_proc(s: &Arc<Session>) {
     let (conn, mut child, port) = {
         let mut st = s.lock();
         st.acp_sid = None;
+        st.key_env = None;
         (st.conn.take(), st.proc.take(), st.port.take())
     };
     if let Some(c) = conn {
@@ -692,44 +705,88 @@ pub fn run_turn(s: &Arc<Session>, text: &str) {
             p
         };
         let payload = if pref.is_empty() { text.to_string() } else { format!("{}\n\n{}", pref, text) };
-        match ensure_proc(s, cand) {
-            Ok(()) => {
-                let conn = { s.lock().conn.clone() };
-                let acp_sid = { s.lock().acp_sid.clone() };
-                let conn = match conn {
-                    Some(c) => c,
-                    None => {
-                        last_err = "no ACP connection".to_string();
-                        kill_proc(s);
-                        continue;
-                    }
-                };
-                let params = json!({
-                    "sessionId": acp_sid.unwrap_or_default(),
-                    "prompt": [{"type": "text", "text": payload}],
-                });
-                match rpc(&conn, "session/prompt", params, TURN_TIMEOUT) {
-                    Ok(_) => {
-                        ok = true;
-                        break;
-                    }
+
+        // Key retry: if the key this attempt used died in a key-class way
+        // (auth / 429 / 5xx / timeout), mark it and run the SAME model again
+        // with the provider's next healthy key before falling back on models.
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let used_key = {
+                match ensure_proc(s, cand) {
+                    Ok(()) => s.lock().key_env.clone(),
                     Err(e) => {
                         last_err = e.clone();
-                        log(&format!("session {}: model {} failed: {}", s.id, cand, e));
-                        kill_proc(s);
-                        if i + 1 < chain.len() {
+                        log(&format!("session {}: spawn for {} failed: {}", s.id, cand, e));
+                        if attempts >= 3 || i + 1 >= chain.len() {
+                            note_delta(s, &format!("\n[{} failed: {}]\n", cand, e));
+                        } else {
                             note_delta(s, &format!("\n[{} failed: {} — trying {}]\n", cand, e, chain[i + 1]));
                         }
+                        break;
                     }
                 }
-            }
-            Err(e) => {
-                last_err = e.clone();
-                log(&format!("session {}: spawn for {} failed: {}", s.id, cand, e));
-                if i + 1 < chain.len() && chain.len() > 1 {
-                    note_delta(s, &format!("\n[{} failed: {} — trying {}]\n", cand, e, chain[i + 1]));
+            };
+            let conn = { s.lock().conn.clone() };
+            let acp_sid = { s.lock().acp_sid.clone() };
+            let conn = match conn {
+                Some(c) => c,
+                None => {
+                    last_err = "no ACP connection".to_string();
+                    kill_proc(s);
+                    break;
+                }
+            };
+            let params = json!({
+                "sessionId": acp_sid.unwrap_or_default(),
+                "prompt": [{"type": "text", "text": payload.clone()}],
+            });
+            match rpc(&conn, "session/prompt", params, TURN_TIMEOUT) {
+                Ok(_) => {
+                    if let Some(k) = &used_key {
+                        models::mark_key_success(k);
+                    }
+                    ok = true;
+                    break;
+                }
+                Err(e) => {
+                    last_err = e.clone();
+                    log(&format!("session {}: model {} failed: {}", s.id, cand, e));
+                    kill_proc(s);
+                    // Take a bad key out of rotation and retry the same model
+                    // with another key, if there is one left.
+                    let mut retried = false;
+                    if let Some(k) = &used_key {
+                        if models::classify_failure(&e).is_some() {
+                            models::mark_key_failure(k, &e);
+                            if let Some(prov) = cand.split_once('/').map(|(p, _)| p.to_string()) {
+                                if let Some(base) = models::registry()
+                                    .provider(&prov)
+                                    .and_then(|p| p.get("api_key_env").and_then(|v| v.as_str()).map(String::from))
+                                {
+                                    if models::other_key_left(&base, k) && attempts < 4 {
+                                        note_delta(s, &format!(
+                                            "\n[{}: key {} failed ({}) — retrying with the next key]\n",
+                                            cand, k, e
+                                        ));
+                                        retried = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if retried {
+                        continue;
+                    }
+                    if i + 1 < chain.len() {
+                        note_delta(s, &format!("\n[{} failed: {} — trying {}]\n", cand, e, chain[i + 1]));
+                    }
+                    break;
                 }
             }
+        }
+        if ok {
+            break;
         }
     }
     if !ok {
@@ -851,6 +908,7 @@ pub fn load_sessions() {
                 needs_preamble: false,
                 turn: None,
                 proc: None,
+                key_env: None,
                 port: None,
                 conn: None,
                 acp_sid: None,
