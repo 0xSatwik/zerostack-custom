@@ -84,6 +84,13 @@ config, and live box state. Our binary is stock upstream 1.8.6 + 9 edited prompt
 - **Effort:** medium-large (gateway settings + search.json schema + web.py backend switch + Reddit leg + fetch fallback + /admin UI + skill). Build after the actor endpoint details are confirmed from the actor pages.
 - **Completion rule (user, 2026-11-22):** once all the task.md items for this work are done, update GitHub with ALL the files — code, settings, skill, and the guide too (README / setup docs updated to explain the new backend selector, Apify key → actor setup, Reddit leg, and fetch fallback). Nothing stays local-only.
 
+### 12. Multi-key rotation + key health per provider (advanced, user request 2026-11-23)
+- **What:** allow adding MULTIPLE API keys for the same provider/base URL (e.g., several 100milionseek keys for DeepSeek). The gateway rotates requests across the keys round-robin, so load spreads and responses are faster, and one key hitting a rate limit does not block the others.
+- **Key health / circuit breaker:** track each key's health. If a key fails (auth error, 429, 5xx, timeout), STOP sending requests to it — take it out of rotation immediately. Retry it after 2 hours; if it fails again on retry, flag it as bad (visible "flagged" state in /admin, excluded until the user re-enables or replaces it). A key that recovers on retry goes back into rotation.
+- **UI:** /admin provider card shows each key (masked, write-only as today) with its health state (active / cooling down until <time> / flagged). Add-another-key per provider.
+- **Verify first:** the model system already claims "multiple keys per provider with round-robin rotation" — verify it actually works end-to-end (add a second key for the same base URL, confirm rotation happens and a failing key is skipped), because the user reports it does not work today. Fix it if it is broken, do not just re-document it.
+- **Effort:** medium (gateway key store + rotation + health state + 2h retry timer + /admin UI). Builds on the same gateway/model code as the Apify work (item 11/11a). When done, push everything to GitHub including the guide, per the completion rule.
+
 ## SKIP / DEFER
 
 ### Multimodal (images/PDFs) — NOT in our binary, defer
