@@ -91,6 +91,12 @@ config, and live box state. Our binary is stock upstream 1.8.6 + 9 edited prompt
 - **Capabilities skill:** a file the agent reads at session start (a prompt/skill) listing what it has — features on/off, tools, MCP servers (browser + vault, TUI-only note), search legs and which backend is selected, vault/browser access. So the agent knows its own capabilities instead of guessing.
 - **Effort:** low–medium (settings schema + /admin UI + one prompt file).
 
+### 14. Gateway resilience: retry on provider 503 + verify fallback triggers (user request 2026-11-23 — fix on the live site, push to GitHub)
+- **Root cause (verified 2026-11-23 ~20:13 IST):** 100milionseek returns 503 `upstream_busy` when its single upstream is at full capacity (live status: 566 in flight, 252,665 retries, 127k failed). The repo and config were correct — base URL, model, key all match the docs. The docs say 503 means "service at full capacity, retry after the Retry-After seconds" (20s).
+- **Fix:** when a provider returns 503 (or 429/502), retry the request after the Retry-After seconds instead of failing the turn and dying. Verify the gateway fallback actually triggers — `fallback_enabled = true` and `fallback_order` are set in config.toml, but the session died on a 503 instead of falling back. Find why and fix it so a 503 moves to the next provider in the order.
+- **Deploy + push:** this is a live-site fix — rebuild and restart the gateway so the live site has it, and push the code to GitHub with the guide. Same rule as the rest of the queue: every batch goes live AND to GitHub.
+- **Effort:** small–medium (gateway retry + fallback path).
+
 ### 12. Multi-key rotation + key health per provider (advanced, user request 2026-11-23)
 - **What:** allow adding MULTIPLE API keys for the same provider/base URL (e.g., several 100milionseek keys for DeepSeek). The gateway rotates requests across the keys round-robin, so load spreads and responses are faster, and one key hitting a rate limit does not block the others.
 - **Key health / circuit breaker:** track each key's health. If a key fails (auth error, 429, 5xx, timeout), STOP sending requests to it — take it out of rotation immediately. Retry it after 2 hours; if it fails again on retry, flag it as bad (visible "flagged" state in /admin, excluded until the user re-enables or replaces it). A key that recovers on retry goes back into rotation.
