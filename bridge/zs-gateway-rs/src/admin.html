@@ -437,13 +437,53 @@ table.grid tr.def td{background:#0c0f14}
               <div><label for="cf_url">cf-search worker URL (Bing)</label>
                 <input id="cf_url" class="mono" placeholder="https://cf-search.<sub>.workers.dev"></div>
             </div>
+            <div class="field">
+              <div><label for="sc_backend">Search backend — one at a time</label>
+                <select id="sc_backend" onchange="renderApifyVis()">
+                  <option value="monid">Monid (TinyFish free)</option>
+                  <option value="bing">Bing combination</option>
+                  <option value="apify">Apify (your own actors)</option>
+                </select></div>
+            </div>
             <div class="field tight" style="align-items:center">
               <label class="chk"><input type="checkbox" id="tg_tinyfish"> TinyFish</label>
               <label class="chk"><input type="checkbox" id="tg_bing"> Bing</label>
               <label class="chk"><input type="checkbox" id="tg_x"> X / social</label>
+              <label class="chk"><input type="checkbox" id="tg_reddit"> Reddit (Apify actor)</label>
               <div style="flex:0 0 auto"><button onclick="saveSearch()">Save search settings</button></div>
             </div>
+            <p class="hint">Fetch always uses Monid for web research; if Monid fetch fails or is blocked, the Camoufox
+              browser fetches the page instead. Reddit search needs the Reddit actor below and the Apify backend.</p>
             <p class="hint">fixtweet worker: X/Twitter, Bluesky, TikTok, Instagram, Threads, Mastodon — no key. Endpoints: /ai/2/ask (one-shot pack), /api/2/search (JSON walk), /ai/2/post?url=. Full manual: the worker's /llms.txt. cf-search worker: Bing web/images/videos/news via /search. Full manual: the worker's /llm.txt.</p>
+          </div>
+          <div class="sec" id="apifySec">
+            <h2>Apify — your own actors</h2>
+            <p class="hint" style="margin-top:0">Multiple API keys are fine — you pick which saved key runs each leg.
+              Under each key, add your actors by <b style="color:var(--fg)">name + actor ID</b> (add as many as you like).
+              Actor IDs are public; the token is only needed to run them. Tokens are write-only and never come back.</p>
+            <div id="apifyCards"><div class="empty">No Apify keys yet — add one below.</div></div>
+            <div id="apifyLegs" style="margin-top:14px">
+              <div class="field" id="ap_search_leg">
+                <div><label for="ap_search_key">Search leg — key</label>
+                  <select id="ap_search_key" onchange="legActors('search', null)"></select></div>
+                <div><label for="ap_search_actor">Search leg — actor</label>
+                  <select id="ap_search_actor" disabled></select></div>
+              </div>
+              <div class="field">
+                <div><label for="ap_reddit_key">Reddit leg — key</label>
+                  <select id="ap_reddit_key" onchange="legActors('reddit', null)"></select></div>
+                <div><label for="ap_reddit_actor">Reddit leg — actor</label>
+                  <select id="ap_reddit_actor" disabled></select></div>
+              </div>
+            </div>
+            <div class="field" style="margin-top:12px">
+              <div><label for="ap_label">Key label</label>
+                <input id="ap_label" class="mono" placeholder="main"></div>
+              <div><label for="ap_key">Apify API token</label>
+                <input id="ap_key" type="password" class="mono" placeholder="apify_api_… (write-only)"></div>
+              <div style="flex:0 0 auto;align-self:flex-end"><button onclick="apifyAdd()">Add key</button></div>
+            </div>
+            <p class="hint">Running your own actors is not charged per event — only platform compute from your plan's credits.</p>
           </div>
         </div>
       </section>
@@ -519,9 +559,9 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const OK_TAGS = new Set(("DIV SPAN P B STRONG EM CODE PRE A UL OL LI BR HR TABLE THEAD TBODY TR TH TD " +
-  "LABEL INPUT BUTTON").split(" "));
+  "LABEL INPUT BUTTON SELECT OPTION").split(" "));
 const OK_ATTR = new Set(["class","href","title","style","data-pane","data-act","data-id","data-p",
-  "data-i","type","value","placeholder","checked","disabled"]);
+  "data-i","data-leg","data-env","type","value","placeholder","checked","disabled","selected"]);
 const _parser = new DOMParser();
 function _clean(root){
   [...root.querySelectorAll("*")].forEach(el => {
@@ -548,6 +588,7 @@ function getTok(){ try { return localStorage.getItem("zsgtok") || sessionStorage
 function saveTok(t){ try { localStorage.setItem("zsgtok", t); } catch(e){} }
 let TOK = getTok();
 let MS = { providers: [], models: [], order: [], default: "", fallback_enabled: true };
+let SC = {};
 let LOADED = null;
 
 function toast(m, ms){
@@ -659,12 +700,17 @@ async function loadAll(){
     $("monidBadge").className = "pill " + (monid.set ? "ok" : "no");
     // Web search settings (worker URLs + leg toggles) from /settings-info.
     const sc = (sinfo && sinfo.search) || {};
+    SC = sc;
     if ($("fx_url")) $("fx_url").value = sc.fxembed_url || "";
     if ($("fx_url2")) $("fx_url2").value = sc.fxembed_url_2 || "";
     if ($("cf_url")) $("cf_url").value = sc.cf_search_url || "";
     if ($("tg_tinyfish")) $("tg_tinyfish").checked = sc.tinyfish !== false;
     if ($("tg_bing")) $("tg_bing").checked = sc.bing !== false;
     if ($("tg_x")) $("tg_x").checked = sc.x !== false;
+    if ($("tg_reddit")) $("tg_reddit").checked = !!sc.reddit;
+    if ($("sc_backend")) $("sc_backend").value = sc.backend || "monid";
+    renderApify(sc);
+    renderApifyVis();
   } catch(e){
     if (attempt === 0) { await new Promise(r => setTimeout(r, 1200)); continue; }
     LOADED = null;
@@ -923,6 +969,12 @@ document.addEventListener("click", async e => {
         body: JSON.stringify({ action: "remove", name }) });
       loadAll(); toast("Provider removed");
     } catch(err){ toast(err.message); }
+  } else if (act === "kenable"){
+    try {
+      await api("/provider-keys", { method: "POST",
+        body: JSON.stringify({ action: "enable", env_name: b.dataset.id }) });
+      loadAll(); toast("Key re-enabled and back in rotation");
+    } catch(err){ toast(err.message); }
   } else if (act === "krm"){
     const prov = b.dataset.p;
     const env = b.dataset.id;
@@ -944,6 +996,23 @@ document.addEventListener("click", async e => {
     if (!row) return;
     const box = row.querySelector(".provKey");
     if (box){ box.hidden = true; box.querySelector("input").value = ""; }
+  } else if (act === "aprm"){
+    if (!confirm("Remove this Apify key and its actors?")) return;
+    try {
+      SC = await api("/apify-keys", { method: "POST",
+        body: JSON.stringify({ action: "remove_key", id: Number(name) }) });
+      renderApify(SC); renderApifyVis(); toast("Apify key removed");
+    } catch(err){ toast(err.message); }
+  } else if (act === "apactoradd"){
+    await apifyActorAdd(Number(name));
+  } else if (act === "apactorrm"){
+    const actorName = b.dataset.env;
+    if (!confirm('Remove actor "' + actorName + '"?')) return;
+    try {
+      SC = await api("/apify-keys", { method: "POST",
+        body: JSON.stringify({ action: "remove_actor", key_id: Number(name), name: actorName }) });
+      renderApify(SC); renderApifyVis(); toast("Actor removed");
+    } catch(err){ toast(err.message); }
   } else if (act === "pkeysave"){
     const row = b.closest(".prov");
     if (!row) return;
@@ -1020,17 +1089,30 @@ async function removeProvider(){
   } catch(e){ toast(e.message); }
 }
 
+function healthPill(k){
+  const h = k.health || "active";
+  if (!k.set) return '<span class="pill no">not set</span>';
+  if (h === "flagged") return '<span class="pill no" title="' + esc(k.last_error || "") + '">flagged</span>';
+  if (h === "cooling"){
+    const when = k.until ? new Date(Number(k.until) * 1000).toLocaleTimeString() : "";
+    return '<span class="pill" title="' + esc(k.last_error || "") + '">cooling → ' + esc(when) + "</span>";
+  }
+  return '<span class="pill ok">active</span>';
+}
 function renderKeySlots(ms){
   const provs = (ms.providers || []).filter(p => (p.keys || []).length);
   if (!provs.length){ set($("keySlots"), '<div class="empty">No key slots yet.</div>'); return; }
-  let html = '<table class="grid"><thead><tr><th>Provider</th><th>Slot</th><th style="width:90px">State</th>' +
-    '<th style="width:90px"></th></tr></thead><tbody>';
+  let html = '<table class="grid"><thead><tr><th>Provider</th><th>Slot</th><th style="width:100px">Set</th>' +
+    '<th style="width:170px">Health</th><th style="width:120px"></th></tr></thead><tbody>';
   provs.forEach(p => {
     (p.keys || []).forEach((k, i) => {
+      const bad = k.set && (k.health === "flagged" || k.health === "cooling");
       html += "<tr><td class=\"mono\">" + (i === 0 ? esc(p.name) : "") + "</td>" +
         '<td class="mono mut">' + esc(k.env) + "</td>" +
         '<td><span class="pill ' + (k.set ? "ok" : "no") + '">' + (k.set ? "set" : "not set") + "</span></td>" +
+        "<td>" + healthPill(k) + "</td>" +
         '<td><div class="rowbtns">' +
+        (bad ? '<button data-act="kenable" data-p="' + esc(p.name) + '" data-id="' + esc(k.env) + '">re-enable</button>' : "") +
         (k.set && (k.env !== p.api_key_env)
           ? '<button class="danger" data-act="krm" data-p="' + esc(p.name) + '" data-id="' + esc(k.env) + '">rm</button>'
           : '<span class="mut2 mono" style="font-size:10px">' + (k.env === p.api_key_env ? "primary" : "") + "</span>") +
@@ -1095,10 +1177,126 @@ async function saveSearch(){
     tinyfish: $("tg_tinyfish").checked,
     bing: $("tg_bing").checked,
     x: $("tg_x").checked,
+    reddit: $("tg_reddit").checked,
+    backend: $("sc_backend").value,
+    apify_search_key: apifyKeySel("search"),
+    apify_search_actor: apifyActorSel("search"),
+    apify_reddit_key: apifyKeySel("reddit"),
+    apify_reddit_actor: apifyActorSel("reddit"),
   };
   try {
     await api("/search-settings", { method: "POST", body: JSON.stringify(body) });
     loadAll(); toast("Search settings saved — web.py reads them from search.json");
+  } catch(e){ toast(e.message); }
+}
+
+/* ---------- Apify: user's own keys + actors (nothing pre-filled) ---------- */
+function apifyKey(id){ return (SC.apify_keys || []).find(k => Number(k.id) === Number(id)) || null; }
+function actorOptions(key, selected){
+  const actors = (key && key.actors) || [];
+  let html = '<option value="">— pick an actor —</option>';
+  actors.forEach(a => {
+    html += '<option value="' + esc(a.name) + '"' +
+      (a.name === selected ? " selected" : "") + ">" + esc(a.name) + " · " + esc(a.actor_id) + "</option>";
+  });
+  return html;
+}
+function keyOptions(leg){
+  const keys = SC.apify_keys || [];
+  let html = '<option value="0">— pick a key —</option>';
+  keys.forEach(k => {
+    html += '<option value="' + esc(k.id) + '">' + esc(k.label || ("key " + k.id)) +
+      (k.set ? "" : " (no token)") + "</option>";
+  });
+  return html;
+}
+function renderApify(sc){
+  const keys = sc.apify_keys || [];
+  const host = $("apifyCards");
+  if (!host) return;
+  if (!keys.length){ set(host, '<div class="empty">No Apify keys yet — add one below.</div>'); return; }
+  let html = "";
+  keys.forEach(k => {
+    const actors = k.actors || [];
+    html += '<div class="prov" data-env="' + esc(k.env) + '"><span class="nm">' + esc(k.label || ("key " + k.id)) + "</span>" +
+      '<span class="pill ' + (k.set ? "ok" : "no") + '">' + (k.set ? "token set" : "no token") + "</span>" +
+      '<span class="u mono">' + esc(k.env) + " · " + actors.length + " actor" + (actors.length === 1 ? "" : "s") + "</span>" +
+      '<div class="rowbtns"><button class="danger" data-act="aprm" data-id="' + esc(k.id) + '">rm key</button></div></div>';
+    html += '<div style="margin:0 0 14px 12px;border-left:1px solid #1c1c1c;padding-left:12px">';
+    if (!actors.length){
+      html += '<div class="empty" style="padding:4px 2px">No actors on this key yet.</div>';
+    } else {
+      actors.forEach(a => {
+        html += '<div class="field tight" style="align-items:center;gap:8px;margin-bottom:4px">' +
+          '<span class="mono" style="font-size:12px;min-width:120px">' + esc(a.name) + "</span>" +
+          '<span class="mono mut2" style="font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">' + esc(a.actor_id) + "</span>" +
+          '<button class="danger" data-act="apactorrm" data-id="' + esc(k.id) + '" data-env="' + esc(a.name) + '">rm</button></div>';
+      });
+    }
+    html += '<div class="field tight" style="align-items:flex-end;gap:6px;margin-top:6px">' +
+      '<div style="min-width:110px"><label>Actor name</label><input class="mono ap_name" data-key="' + esc(k.id) + '" placeholder="web search"></div>' +
+      '<div style="min-width:170px"><label>Actor ID</label><input class="mono ap_id" data-key="' + esc(k.id) + '" placeholder="username~actor-slug"></div>' +
+      '<button data-act="apactoradd" data-id="' + esc(k.id) + '">Add actor</button></div>';
+    html += "</div>";
+  });
+  set(host, html);
+  ["search", "reddit"].forEach(leg => {
+    const sel = $("ap_" + leg + "_key");
+    if (!sel) return;
+    set(sel, keyOptions(leg));
+    sel.value = String((leg === "search" ? sc.apify_search_key : sc.apify_reddit_key) || 0);
+    legActors(leg, sc);
+  });
+}
+function legActors(leg, sc){
+  const sel = $("ap_" + leg + "_key"), host = $("ap_" + leg + "_actor");
+  if (!sel || !host) return;
+  const k = apifyKey(sel.value);
+  const want = leg === "search" ? (sc || SC).apify_search_actor : (sc || SC).apify_reddit_actor;
+  if (!k){ set(host, ""); host.disabled = true; return; }
+  host.disabled = false;
+  set(host, actorOptions(k, want));
+}
+function apifyKeySel(leg){
+  const el = $("ap_" + leg + "_key");
+  return el ? Number(el.value || 0) : 0;
+}
+function apifyActorSel(leg){
+  const el = $("ap_" + leg + "_actor");
+  return el ? (el.value || "") : "";
+}
+function renderApifyVis(){
+  const bk = $("sc_backend") ? $("sc_backend").value : "monid";
+  const sec = $("apifySec");
+  const redditOn = $("tg_reddit") && $("tg_reddit").checked;
+  if (sec) sec.hidden = !(bk === "apify" || redditOn);
+  const legSel = $("ap_search_leg");
+  if (legSel) legSel.hidden = bk !== "apify";
+}
+async function apifyAdd(){
+  const label = ($("ap_label").value || "").trim();
+  const key = ($("ap_key").value || "").trim();
+  if (!key){ toast("paste the Apify API token first"); return; }
+  try {
+    SC = await api("/apify-keys", { method: "POST",
+      body: JSON.stringify({ action: "add_key", label, key }) });
+    $("ap_key").value = ""; $("ap_label").value = "";
+    renderApify(SC); renderApifyVis();
+    toast("Apify key saved — now add its actors");
+  } catch(e){ toast(e.message); }
+}
+async function apifyActorAdd(keyId){
+  const row = document.querySelector('.prov[data-env]');
+  const nm = document.querySelector('.ap_name[data-key="' + CSS.escape(String(keyId)) + '"]');
+  const id = document.querySelector('.ap_id[data-key="' + CSS.escape(String(keyId)) + '"]');
+  const name = nm ? nm.value.trim() : "";
+  const actorId = id ? id.value.trim() : "";
+  if (!name || !actorId){ toast("actor name and actor ID are both needed"); return; }
+  try {
+    SC = await api("/apify-keys", { method: "POST",
+      body: JSON.stringify({ action: "add_actor", key_id: keyId, name, actor_id: actorId }) });
+    renderApify(SC); renderApifyVis();
+    toast("Actor added");
   } catch(e){ toast(e.message); }
 }
 async function setAdminPw(){
