@@ -287,25 +287,77 @@ fn save_vault_url(raw: &str) -> Result<Value, String> {
 // Stored in search.json; read by web.py and the web-research skill from the
 // shell env. The Monid key is NOT in this file — it stays in Monid's own
 // credential store, the same one POST /monid writes.
-fn search_cfg() -> Value {
-    let v = std::fs::read_to_string(SEARCH_FILE)
+fn search_file_raw() -> Value {
+    std::fs::read_to_string(SEARCH_FILE)
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .filter(|v| v.is_object())
-        .unwrap_or_else(|| json!({}));
+        .unwrap_or_else(|| json!({}))
+}
+
+fn search_cfg() -> Value {
+    let v = search_file_raw();
     let on = |k: &str, d: bool| v.get(k).and_then(|x| x.as_bool()).unwrap_or(d);
+    let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let backend = match s("backend").as_str() {
+        "apify" | "bing" => s("backend"),
+        _ => "monid".to_string(),
+    };
+    // Apify keys are stored as env-name references + actor lists; the token
+    // values live in provider-keys.env and never come back through the API.
+    let keys: Vec<Value> = v
+        .get("apify_keys")
+        .and_then(|x| x.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|k| {
+                    let env = k.get("env").and_then(|x| x.as_str())?.to_string();
+                    let actors: Vec<Value> = k
+                        .get("actors")
+                        .and_then(|x| x.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .map(|a| {
+                                    json!({
+                                        "name": a.get("name").and_then(|x| x.as_str()).unwrap_or(""),
+                                        "actor_id": a.get("actor_id").and_then(|x| x.as_str()).unwrap_or(""),
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Some(json!({
+                        "id": k.get("id").and_then(|x| x.as_i64()).unwrap_or(0),
+                        "label": k.get("label").and_then(|x| x.as_str()).unwrap_or(""),
+                        "env": env.clone(),
+                        "set": models::key_value(&env).is_some(),
+                        "actors": actors,
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     json!({
-        "cf_search_url": v.get("cf_search_url").and_then(|x| x.as_str()).unwrap_or(""),
-        "fxembed_url": v.get("fxembed_url").and_then(|x| x.as_str()).unwrap_or(""),
-        "fxembed_url_2": v.get("fxembed_url_2").and_then(|x| x.as_str()).unwrap_or(""),
+        "backend": backend,
+        "cf_search_url": s("cf_search_url"),
+        "fxembed_url": s("fxembed_url"),
+        "fxembed_url_2": s("fxembed_url_2"),
         "tinyfish": on("tinyfish", true),
         "bing": on("bing", true),
         "x": on("x", true),
+        "reddit": on("reddit", false),
+        "apify_keys": keys,
+        "apify_search_key": v.get("apify_search_key").and_then(|x| x.as_i64()).unwrap_or(0),
+        "apify_search_actor": s("apify_search_actor"),
+        "apify_reddit_key": v.get("apify_reddit_key").and_then(|x| x.as_i64()).unwrap_or(0),
+        "apify_reddit_actor": s("apify_reddit_actor"),
     })
 }
 
 fn save_search_cfg(b: &Value) -> Result<Value, String> {
-    let mut cur = search_cfg();
+    // Merge into the raw file so fields managed elsewhere (apify_keys, the
+    // per-leg Apify selections) are never wiped by a settings save.
+    let mut cur = search_file_raw();
     if let Some(raw) = b.get("cf_search_url").and_then(|v| v.as_str()) {
         cur["cf_search_url"] = json!(match raw.trim() {
             "" => String::new(),
@@ -327,16 +379,172 @@ fn save_search_cfg(b: &Value) -> Result<Value, String> {
             });
         }
     }
-    for k in ["tinyfish", "bing", "x"] {
+    for k in ["tinyfish", "bing", "x", "reddit"] {
         if let Some(v) = b.get(k).and_then(|v| v.as_bool()) {
             cur[k] = json!(v);
+        }
+    }
+    // Search backend: monid (default) | bing | apify. One at a time.
+    if let Some(bk) = b.get("backend").and_then(|v| v.as_str()) {
+        let bk = bk.trim().to_lowercase();
+        if !["monid", "bing", "apify"].contains(&bk.as_str()) {
+            return Err("backend must be one of: monid, bing, apify".into());
+        }
+        cur["backend"] = json!(bk);
+    }
+    // Per-leg Apify selection: which saved key + which actor name runs it.
+    for k in ["apify_search_key", "apify_reddit_key"] {
+        if let Some(v) = b.get(k).and_then(|v| v.as_i64()) {
+            cur[k] = json!(v);
+        }
+    }
+    for k in ["apify_search_actor", "apify_reddit_actor"] {
+        if let Some(v) = b.get(k).and_then(|v| v.as_str()) {
+            cur[k] = json!(v.trim());
         }
     }
     let body = serde_json::to_string_pretty(&cur).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(SEARCH_FILE, format!("{}\n", body))
         .map_err(|e| format!("could not save the search settings: {}", e))?;
     set_mode_600(SEARCH_FILE);
-    Ok(cur)
+    Ok(search_cfg())
+}
+
+// ---- Apify keys + actors (user's own, added via /admin) --------------------
+// Tokens go to provider-keys.env as APIFY_API_KEY[_N]; search.json keeps the
+// env-name reference, the display label and the actor name + actor-ID pairs.
+// Nothing is ever pre-filled or hardcoded — the user adds every actor.
+fn apify_normalize_actor_id(raw: &str) -> Result<String, String> {
+    let s = raw.trim().trim_start_matches('/').to_string();
+    let s = s.strip_prefix("https://apify.com/").unwrap_or(&s).to_string();
+    let s = s.trim().to_string();
+    if s.is_empty() {
+        return Err("actor ID is required".into());
+    }
+    if s.chars().any(|c| c.is_whitespace() || c == '"' || c == '\\') {
+        return Err("actor ID must not contain spaces or quotes".into());
+    }
+    // Accept username~slug or username/slug; store the tilde form used by the
+    // run endpoints. A plain actor id (hash) is also accepted as-is.
+    let s = if s.matches('~').count() + s.matches('/').count() == 1 {
+        s.replace('/', "~")
+    } else {
+        s
+    };
+    Ok(s)
+}
+
+fn apify_keys_edit(b: &Value) -> Result<Value, String> {
+    let action = b.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let mut cur = search_file_raw();
+    let mut keys: Vec<Value> = cur
+        .get("apify_keys")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
+    match action {
+        "add_key" => {
+            let label = b.get("label").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let token = b.get("key").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            if token.is_empty() {
+                return Err("the Apify API token is required".into());
+            }
+            if token.len() < 8 {
+                return Err("the Apify API token looks too short — paste the whole token".into());
+            }
+            let used: Vec<String> = keys
+                .iter()
+                .filter_map(|k| k.get("env").and_then(|x| x.as_str()).map(String::from))
+                .collect();
+            let mut env = String::new();
+            for i in 1..=20 {
+                let n = if i == 1 { "APIFY_API_KEY".to_string() } else { format!("APIFY_API_KEY_{}", i) };
+                if !used.contains(&n) && models::key_value(&n).is_none() {
+                    env = n;
+                    break;
+                }
+            }
+            if env.is_empty() {
+                return Err("no free Apify key slot (20 max)".into());
+            }
+            if !models::save_secret(&env, &token) {
+                return Err("could not save the Apify token".into());
+            }
+            let id = keys
+                .iter()
+                .filter_map(|k| k.get("id").and_then(|x| x.as_i64()))
+                .max()
+                .unwrap_or(0)
+                + 1;
+            keys.push(json!({
+                "id": id,
+                "label": if label.is_empty() { format!("key {}", id) } else { label },
+                "env": env,
+                "actors": [],
+            }));
+        }
+        "remove_key" => {
+            let id = b.get("id").and_then(|v| v.as_i64()).ok_or("key id required")?;
+            let pos = keys
+                .iter()
+                .position(|k| k.get("id").and_then(|x| x.as_i64()) == Some(id))
+                .ok_or("no such Apify key")?;
+            let k = keys.remove(pos);
+            if let Some(env) = k.get("env").and_then(|x| x.as_str()) {
+                let _ = models::remove_secret(env);
+            }
+            // Clear any leg selection that pointed at the removed key.
+            if cur.get("apify_search_key").and_then(|x| x.as_i64()) == Some(id) {
+                cur["apify_search_key"] = json!(0);
+                cur["apify_search_actor"] = json!("");
+            }
+            if cur.get("apify_reddit_key").and_then(|x| x.as_i64()) == Some(id) {
+                cur["apify_reddit_key"] = json!(0);
+                cur["apify_reddit_actor"] = json!("");
+            }
+        }
+        "add_actor" => {
+            let id = b.get("key_id").and_then(|v| v.as_i64()).ok_or("key id required")?;
+            let name = b.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let actor_id = apify_normalize_actor_id(b.get("actor_id").and_then(|v| v.as_str()).unwrap_or(""))?;
+            if name.is_empty() {
+                return Err("actor name is required".into());
+            }
+            let k = keys
+                .iter_mut()
+                .find(|k| k.get("id").and_then(|x| x.as_i64()) == Some(id))
+                .ok_or("no such Apify key")?;
+            if k.get("actors").and_then(|x| x.as_array()).is_none() {
+                k["actors"] = json!([]);
+            }
+            let actors = k["actors"].as_array_mut().unwrap();
+            if actors
+                .iter()
+                .any(|a| a.get("name").and_then(|x| x.as_str()) == Some(name.as_str()))
+            {
+                return Err(format!("actor '{}' already exists under this key", name));
+            }
+            actors.push(json!({"name": name, "actor_id": actor_id}));
+        }
+        "remove_actor" => {
+            let id = b.get("key_id").and_then(|v| v.as_i64()).ok_or("key id required")?;
+            let name = b.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let k = keys
+                .iter_mut()
+                .find(|k| k.get("id").and_then(|x| x.as_i64()) == Some(id))
+                .ok_or("no such Apify key")?;
+            if let Some(actors) = k.get_mut("actors").and_then(|x| x.as_array_mut()) {
+                actors.retain(|a| a.get("name").and_then(|x| x.as_str()) != Some(name.as_str()));
+            }
+        }
+        _ => return Err("action must be add_key, remove_key, add_actor or remove_actor".into()),
+    }
+    cur["apify_keys"] = json!(keys);
+    let body = serde_json::to_string_pretty(&cur).unwrap_or_else(|_| "{}".to_string());
+    std::fs::write(SEARCH_FILE, format!("{}\n", body))
+        .map_err(|e| format!("could not save the Apify settings: {}", e))?;
+    set_mode_600(SEARCH_FILE);
+    Ok(search_cfg())
 }
 
 fn provider_key_status() -> Value {
@@ -644,6 +852,8 @@ fn key_add(b: &Value) -> Result<Value, String> {
     if !models::save_secret(&slot, &value) {
         return Err("could not save the key".into());
     }
+    // A freshly pasted key starts clean, even if that slot was flagged before.
+    models::enable_key(&slot);
     Ok(json!({"ok": true, "env_name": slot}))
 }
 
@@ -661,6 +871,7 @@ fn key_remove(b: &Value) -> Result<Value, String> {
     if !models::remove_secret(&env_name) {
         return Err("could not remove the key".into());
     }
+    models::enable_key(&env_name);
     Ok(json!({"ok": true}))
 }
 
@@ -900,6 +1111,11 @@ fn handle(app: &Arc<App>, req: &http::Request) -> http::Response {
                     Err(e) => json_err(400, &e),
                 };
             }
+            // Apify keys + actors: tokens are write-only (provider-keys.env),
+            // actor name + actor-ID pairs and the key list live in search.json.
+            "/apify-keys" => {
+                return result_resp(apify_keys_edit(&body));
+            }
             "/secret" => {
                 let env_name = body.get("env_name").and_then(|v| v.as_str()).unwrap_or("").trim();
                 let value = body.get("value").and_then(|v| v.as_str()).unwrap_or("").trim();
@@ -972,7 +1188,16 @@ fn handle(app: &Arc<App>, req: &http::Request) -> http::Response {
                 return result_resp(match action {
                     "add" => key_add(&body),
                     "remove" => key_remove(&body),
-                    _ => Err("action must be add or remove".into()),
+                    // Re-enable a flagged / cooling key the user has fixed.
+                    "enable" => {
+                        let env_name = body.get("env_name").and_then(|v| v.as_str()).unwrap_or("").trim();
+                        if env_name.is_empty() {
+                            return json_err(400, "env_name required");
+                        }
+                        models::enable_key(env_name);
+                        return json_ok(json!({"ok": true, "env_name": env_name, "health": "active"}));
+                    }
+                    _ => Err("action must be add, remove or enable".into()),
                 });
             }
             "/models" => {
