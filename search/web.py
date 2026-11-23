@@ -90,6 +90,171 @@ CF_SEARCH_URL = os.environ.get("CF_SEARCH_URL") or _SETTINGS.get("cf_search_url"
 # legs still work. No URL is ever written literally in this file.
 UA = {"User-Agent": "Muse/1.0"}
 
+# ---- search backend: monid (default) | bing | apify ---------------------
+# One backend at a time, user-settable in /admin. Apify legs need a key the
+# user added there (token lives in provider-keys.env, never in this file) and
+# an actor they added by name + actor ID. Nothing here is pre-filled.
+BACKEND = (_SETTINGS.get("backend") or "monid").lower()
+if BACKEND not in ("monid", "bing", "apify"):
+    BACKEND = "monid"
+REDDIT_ON = bool(_SETTINGS.get("reddit", False))
+APIFY_API = "https://api.apify.com/v2"
+KEYS_ENV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "provider-keys.env")
+
+
+def _apify_token(env_name):
+    """Token for one Apify key slot: env var first, then provider-keys.env.
+    Never printed, never returned to a caller."""
+    if not env_name:
+        return None
+    v = os.environ.get(env_name)
+    if v:
+        return v.strip()
+    try:
+        for line in open(KEYS_ENV):
+            line = line.strip()
+            if line.startswith(env_name + "="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return None
+
+
+def _apify_leg(leg):
+    """Resolve one Apify leg (search|reddit) -> (token, actor_id) or None.
+    Selection is key id + actor name, both chosen by the user in /admin."""
+    key_id = _SETTINGS.get("apify_%s_key" % leg) or 0
+    actor_name = _SETTINGS.get("apify_%s_actor" % leg) or ""
+    if not key_id or not actor_name:
+        return None
+    for k in _SETTINGS.get("apify_keys") or []:
+        if int(k.get("id") or 0) != int(key_id):
+            continue
+        for a in k.get("actors") or []:
+            if a.get("name") == actor_name:
+                token = _apify_token(k.get("env"))
+                if not token:
+                    print("[apify] %s: key slot %s has no token" % (leg, k.get("env")), file=sys.stderr)
+                    return None
+                return token, a.get("actor_id")
+    print("[apify] %s: no actor named %r under that key" % (leg, actor_name), file=sys.stderr)
+    return None
+
+
+def apify_run(actor_id, token, run_input, timeout=180, limit=40):
+    """Run one of the user's actors and return its dataset items.
+    Actor IDs are public; the token is only needed to run."""
+    q = urllib.parse.urlencode({"token": token})
+    url = "%s/acts/%s/runs?%s" % (APIFY_API, urllib.parse.quote(actor_id, safe="~"), q)
+    req = urllib.request.Request(
+        url, data=json.dumps(run_input).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=40) as r:
+            run = json.load(r).get("data", {})
+    except Exception as e:
+        print("[apify] start failed: %s" % e, file=sys.stderr)
+        return None
+    rid, ds = run.get("id"), run.get("defaultDatasetId")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        st = run.get("status")
+        if st in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"):
+            break
+        time.sleep(3)
+        try:
+            with urllib.request.urlopen("%s/actor-runs/%s?%s" % (APIFY_API, rid, q), timeout=30) as r:
+                run = json.load(r).get("data", {})
+        except Exception as e:
+            print("[apify] poll failed: %s" % e, file=sys.stderr)
+            return None
+    if run.get("status") != "SUCCEEDED":
+        print("[apify] run ended %s" % run.get("status"), file=sys.stderr)
+        return None
+    ds = ds or run.get("defaultDatasetId")
+    try:
+        with urllib.request.urlopen(
+                "%s/datasets/%s/items?%s&limit=%d" % (APIFY_API, ds, q, limit), timeout=60) as r:
+            return json.load(r)
+    except Exception as e:
+        print("[apify] dataset fetch failed: %s" % e, file=sys.stderr)
+        return None
+
+
+def _first(d, *names):
+    for n in names:
+        v = d.get(n)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def apify_search(query, count=20):
+    """Web search through the user's own Apify search actor. Input keys differ
+    per actor, so a small union is sent — actors ignore what they don't use."""
+    leg = _apify_leg("search")
+    if not leg:
+        return None
+    token, actor_id = leg
+    items = apify_run(actor_id, token, {"query": query, "q": query, "searchQuery": query,
+                                        "keyword": query, "maxItems": count, "limit": count,
+                                        "maxResults": count})
+    if items is None:
+        return None
+    out = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        url = _first(it, "url", "link", "href", "organicResults")
+        title = _first(it, "title", "name", "heading")
+        snippet = _first(it, "description", "snippet", "text", "content")
+        if url.startswith("http"):
+            out.append({"title": title, "url": url, "source": "apify", "snippet": snippet[:400]})
+    return out
+
+
+def apify_reddit(query, count=20):
+    """Reddit search through the user's own Reddit scraper actor."""
+    leg = _apify_leg("reddit")
+    if not leg:
+        return None
+    token, actor_id = leg
+    items = apify_run(actor_id, token, {"query": query, "q": query, "searchQuery": query,
+                                        "searchTerm": query, "keyword": query,
+                                        "maxItems": count, "limit": count, "maxPosts": count,
+                                        "sort": "relevance"})
+    if items is None:
+        return None
+    out = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        url = _first(it, "url", "postUrl", "link", "permalink")
+        if url.startswith("/r/"):
+            url = "https://www.reddit.com" + url
+        title = _first(it, "title", "name")
+        body = _first(it, "body", "selfText", "text", "description")
+        if url.startswith("http"):
+            out.append({"title": title, "url": url, "source": "reddit",
+                        "snippet": body[:400], "subreddit": _first(it, "subreddit", "communityName")})
+    return out
+
+
+def camoufox_fetch(url):
+    """Fetch through the headed Camoufox browser (Instabox) when Monid fetch is
+    blocked or fails. Uses the Rust browser CLI; returns text or ''."""
+    cli = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser")
+    if not os.path.exists(cli):
+        return ""
+    try:
+        subprocess.run([cli, "navigate", url], capture_output=True, text=True, timeout=90)
+        r = subprocess.run([cli, "eval", "document.body.innerText"],
+                           capture_output=True, text=True, timeout=60)
+        return (r.stdout or "")[:8000] if r.returncode == 0 else ""
+    except Exception as e:
+        print("[camoufox] fetch failed: %s" % e, file=sys.stderr)
+        return ""
+
 
 def monid_key():
     if os.environ.get("MONID_API_KEY"):
@@ -150,6 +315,24 @@ def tinyfish_search(query, purpose=None):
 def tinyfish_fetch(urls):
     out = monid_run("tinyfish", "/free/fetch", {"body": {"urls": urls, "format": "markdown"}})
     return out.get("results") if out else None
+
+
+def fetch_urls(urls):
+    """Fetch rule: Monid (TinyFish free) first; if that fails or comes back
+    empty, fall back to the Camoufox browser, then plain curl."""
+    res = tinyfish_fetch(urls)
+    if res:
+        return res, "monid"
+    print("[fetch] Monid fetch failed — falling back to the Camoufox browser", file=sys.stderr)
+    via_browser = []
+    for u in urls:
+        t = camoufox_fetch(u)
+        if t:
+            via_browser.append({"url": u, "text": t})
+    if via_browser:
+        return via_browser, "camoufox"
+    print("[fetch] Camoufox failed too — falling back to curl", file=sys.stderr)
+    return [{"url": u, "text": curl_fetch(u)[:8000]} for u in urls], "curl"
 
 
 def cfsearch_search(query, vertical="web", count=10, setlang=None, cc=None, time_range=None):
@@ -260,37 +443,63 @@ def x_trends():
     return json.loads(raw) if raw else None
 
 
+def _leg_on(name):
+    """Per-leg toggle from search.json — a leg that is off does not run."""
+    return bool(_SETTINGS.get(name, True))
+
+
 def combined_search(query, purpose=None):
-    """Web (TinyFish + cf-search Worker, deduped) + X. Returns dict of all sources."""
+    """Web search on the SELECTED backend (monid | bing | apify), deduped,
+    plus the Reddit leg when it is on and Apify is the backend."""
     urls, seen = [], set()
-    tf = tinyfish_search(query, purpose) or []
-    for r in tf:
-        u = r.get("url")
-        if u and u not in seen:
-            seen.add(u); urls.append({"title": r.get("title"), "url": u, "source": "tinyfish", "snippet": r.get("snippet")})
-    cf = cfsearch_search(query) or []
-    for r in cf:
-        u = r.get("url")
-        if u and u not in seen:
-            seen.add(u); urls.append({"title": r.get("title"), "url": u, "source": "cf-search"})
-    return {"web": urls, "tinyfish_count": len(tf), "cfsearch_count": len(cf)}
+    counts = {}
+    def add(rows, label):
+        n = 0
+        for r in rows or []:
+            u = r.get("url")
+            if u and u.startswith("http") and u not in seen:
+                seen.add(u)
+                urls.append({"title": r.get("title"), "url": u, "source": label,
+                             "snippet": r.get("snippet")})
+                n += 1
+        counts[label] = len(rows or [])
+        return n
+    if BACKEND == "apify":
+        rows = apify_search(query)
+        if rows is None:
+            print("[apify] search leg unavailable — falling back to Monid", file=sys.stderr)
+            add(tinyfish_search(query, purpose) if _leg_on("tinyfish") else None, "tinyfish")
+        else:
+            add(rows, "apify")
+    elif BACKEND == "bing":
+        add(cfsearch_search(query) if _leg_on("bing") else None, "cf-search")
+    else:
+        add(tinyfish_search(query, purpose) if _leg_on("tinyfish") else None, "tinyfish")
+        add(cfsearch_search(query) if _leg_on("bing") else None, "cf-search")
+    reddit = []
+    if REDDIT_ON:
+        reddit = apify_reddit(query) or []
+        add(reddit, "reddit")
+    return {"web": urls, "counts": counts, "reddit_count": len(reddit), "backend": BACKEND}
 
 
 def research(query, pages=2, fetch_top=5):
-    """Maximum data: web search (three engines) + X search, then fetch top URLs."""
+    """Maximum data: web search on the selected backend (+ Reddit when on) and
+    X search, then fetch the top URLs (Monid, then Camoufox, then curl)."""
     combo = combined_search(query)
-    try:
-        x = x_search(query, pages=pages)
-    except Exception as e:
-        print(f"[research] X search failed ({e}); continuing with web only", file=sys.stderr)
-        x = None
-    fetched = []
+    x = None
+    if _leg_on("x"):
+        try:
+            x = x_search(query, pages=pages)
+        except Exception as e:
+            print(f"[research] X search failed ({e}); continuing with web only", file=sys.stderr)
+            x = None
+    fetched, via = [], ""
     top = [r["url"] for r in combo["web"][:fetch_top] if r["url"].startswith("http")]
     if top:
-        fetched = tinyfish_fetch(top) or []
-        if not fetched:
-            fetched = [{"url": u, "text": curl_fetch(u)[:8000]} for u in top]
-    return {"query": query, "web_results": combo["web"],
+        fetched, via = fetch_urls(top)
+    return {"query": query, "backend": BACKEND, "web_results": combo["web"],
+            "counts": combo["counts"], "fetch_via": via,
             "x_pack_markdown": x, "fetched": fetched}
 
 
@@ -307,26 +516,32 @@ def main():
     xp = sub.add_parser("xpost"); xp.add_argument("url_or_id")
     xpr = sub.add_parser("xprofile"); xpr.add_argument("handle")
     sub.add_parser("xtrends")
+    rd = sub.add_parser("reddit"); rd.add_argument("query"); rd.add_argument("--count", type=int, default=20)
     r = sub.add_parser("research"); r.add_argument("query"); r.add_argument("--pages", type=int, default=2); r.add_argument("--fetch-top", type=int, default=5)
     args = p.parse_args()
     if args.cmd == "search":
-        res = tinyfish_search(args.query, args.purpose)
-        if res:
-            print(json.dumps(res, indent=2)); return
-        print("[tinyfish] no result, falling back to cf-search Worker", file=sys.stderr)
-        res = cfsearch_search(args.query)
+        if BACKEND == "apify":
+            res = apify_search(args.query)
+            if res is None:
+                print("[apify] no search leg configured — falling back to Monid", file=sys.stderr)
+                res = tinyfish_search(args.query, args.purpose)
+        elif BACKEND == "bing":
+            res = cfsearch_search(args.query)
+        else:
+            res = tinyfish_search(args.query, args.purpose)
+            if not res:
+                print("[tinyfish] no result, falling back to cf-search Worker", file=sys.stderr)
+                res = cfsearch_search(args.query)
         print(json.dumps(res or [], indent=2))
+    elif args.cmd == "reddit":
+        print(json.dumps(apify_reddit(args.query, count=args.count) or [], indent=2))
     elif args.cmd == "search-cf":
         res = cfsearch_search(args.query, vertical=args.vertical, count=args.count,
                               setlang=args.setlang, cc=args.cc, time_range=args.time)
         print(json.dumps(res or [], indent=2))
     elif args.cmd == "fetch":
-        res = tinyfish_fetch(args.urls)
-        if res:
-            print(json.dumps(res, indent=2)); return
-        print("[tinyfish] no result, falling back to curl", file=sys.stderr)
-        for u in args.urls:
-            print(f"## {u}\n{curl_fetch(u)[:8000]}")
+        res, via = fetch_urls(args.urls)
+        print(json.dumps({"via": via, "results": res}, indent=2))
     elif args.cmd == "xsearch":
         print(x_search(args.query, pages=args.pages) or "no X results")
     elif args.cmd == "xpost":
