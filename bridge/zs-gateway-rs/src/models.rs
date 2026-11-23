@@ -13,7 +13,10 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 pub const KEYS_FILE: &str = "/root/pi-bridge/provider-keys.env";
+pub const HEALTH_FILE: &str = "/root/pi-bridge/key-health.json";
 pub const KEY_SLOTS: usize = 10;
+/// A failing key is skipped for this long, then retried once.
+pub const COOLDOWN_SECS: f64 = 7200.0;
 
 fn ms_lock() -> &'static Mutex<()> {
     static L: OnceLock<Mutex<()>> = OnceLock::new();
@@ -318,41 +321,199 @@ pub fn normalize(reg: &mut Value) {
 }
 
 // ---- keys -----------------------------------------------------------------
+// ---- key health -----------------------------------------------------------
+// key-health.json: {"ENV_NAME": {"state":"cooling"|"flagged","until":epoch,
+// "fails":n,"last_error":"...","last_fail":epoch}}. A key that is missing from
+// the file is active. A cooling key is skipped until `until`, then retried
+// once: success clears the entry, a second failure flags it until the user
+// re-enables it from /admin.
+fn now_f() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+pub fn health_map() -> Value {
+    let v = read_json(HEALTH_FILE, json!({}));
+    if v.is_object() { v } else { json!({}) }
+}
+
+fn health_write(v: &Value) {
+    write_json(HEALTH_FILE, v);
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(HEALTH_FILE, std::fs::Permissions::from_mode(0o600));
+}
+
+/// What /admin shows for one key: active, cooling (with the retry time) or
+/// flagged (excluded from rotation until re-enabled).
+pub fn key_state(env_name: &str) -> Value {
+    let h = health_map();
+    let e = h.get(env_name).cloned().unwrap_or(json!({}));
+    let state = e.get("state").and_then(|v| v.as_str()).unwrap_or("active");
+    let until = e.get("until").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let fails = e.get("fails").and_then(|v| v.as_u64()).unwrap_or(0);
+    let last_error = e.get("last_error").and_then(|v| v.as_str()).unwrap_or("");
+    if state == "flagged" {
+        json!({"state": "flagged", "until": 0.0, "fails": fails, "last_error": last_error})
+    } else if state == "cooling" && until > now_f() {
+        json!({"state": "cooling", "until": until, "fails": fails, "last_error": last_error})
+    } else {
+        json!({"state": "active", "until": 0.0, "fails": fails, "last_error": last_error})
+    }
+}
+
+/// Can this key be used right now? Flagged = no; cooling = no until its retry
+/// time passes; everything else = yes.
+pub fn key_usable(env_name: &str) -> bool {
+    key_state(env_name)
+        .get("state")
+        .and_then(|v| v.as_str())
+        .map(|s| s == "active")
+        .unwrap_or(true)
+}
+
+/// Which failure class does this error text belong to? Only clear signals
+/// count, so a slow-but-working key is never punished. None = not a key fault.
+pub fn classify_failure(msg: &str) -> Option<&'static str> {
+    let m = msg.to_lowercase();
+    let has = |s: &str| m.contains(s);
+    // A turn-level timeout is the model being slow, not the key dying.
+    if has("session/prompt timed out") {
+        return None;
+    }
+    if has("401") || has("403") || has("unauthorized") || has("invalid api key")
+        || has("invalid_api_key") || has("incorrect api key") || has("authentication")
+        || has("invalid token") || has("credit") || has("balance")
+    {
+        return Some("auth");
+    }
+    if has("429") || has("rate limit") || has("too many requests") || has("quota") {
+        return Some("rate");
+    }
+    if has("500") || has("502") || has("503") || has("504") || has("service unavailable")
+        || has("upstream_busy") || has("providerresponseerror") || has("timed out")
+        || has("timeout") || has("connection reset") || has("connection refused")
+        || has("error sending request")
+    {
+        return Some("server");
+    }
+    None
+}
+
+/// Record a failure. First failure puts the key on cooldown; a failure on the
+/// retry after that cooldown flags it.
+pub fn mark_key_failure(env_name: &str, msg: &str) {
+    if env_name.is_empty() {
+        return;
+    }
+    let mut h = health_map();
+    let cur = h.get(env_name).cloned().unwrap_or(json!({}));
+    let cur_state = cur.get("state").and_then(|v| v.as_str()).unwrap_or("active");
+    let fails = cur.get("fails").and_then(|v| v.as_u64()).unwrap_or(0) + 1;
+    let short: String = msg.chars().take(200).collect();
+    let entry = if cur_state == "flagged" || cur_state == "cooling" {
+        json!({"state": "flagged", "until": 0.0, "fails": fails,
+               "last_error": short, "last_fail": now_f()})
+    } else {
+        json!({"state": "cooling", "until": now_f() + COOLDOWN_SECS, "fails": fails,
+               "last_error": short, "last_fail": now_f()})
+    };
+    h[env_name] = entry;
+    health_write(&h);
+    crate::log(&format!(
+        "key {} -> {}: {}",
+        env_name,
+        h[env_name].get("state").and_then(|v| v.as_str()).unwrap_or(""),
+        short
+    ));
+}
+
+/// A key that answered fine goes back to plain active.
+pub fn mark_key_success(env_name: &str) {
+    if env_name.is_empty() {
+        return;
+    }
+    let mut h = health_map();
+    if h.get(env_name).is_some() {
+        if let Some(o) = h.as_object_mut() {
+            o.remove(env_name);
+        }
+        health_write(&h);
+    }
+}
+
+/// User pressed "re-enable" in /admin: forget the health record entirely.
+pub fn enable_key(env_name: &str) {
+    mark_key_success(env_name);
+}
+
 pub fn provider_keys(env_base: &str) -> Vec<Value> {
     let mut out = Vec::new();
     if env_base.is_empty() {
         return out;
     }
-    out.push(json!({"env": env_base, "set": key_value(env_base).is_some()}));
+    let with_health = |env: String, set: bool| -> Value {
+        let mut v = json!({"env": env, "set": set});
+        if set {
+            let st = key_state(&env);
+            v["health"] = st.get("state").cloned().unwrap_or(json!("active"));
+            v["until"] = st.get("until").cloned().unwrap_or(json!(0.0));
+            v["fails"] = st.get("fails").cloned().unwrap_or(json!(0));
+            v["last_error"] = st.get("last_error").cloned().unwrap_or(json!(""));
+        }
+        v
+    };
+    out.push(with_health(env_base.to_string(), key_value(env_base).is_some()));
     for i in 2..=KEY_SLOTS {
         let n = format!("{}_{}", env_base, i);
         if key_value(&n).is_some() {
-            out.push(json!({"env": n, "set": true}));
+            out.push(with_health(n, true));
         }
     }
     out
 }
 
-/// Round-robin over the SET keys of one provider. Counter persisted, tiny file.
-pub fn rotation_next(provider: &str, keys: &[Value]) -> Option<String> {
-    let usable: Vec<String> = keys
+/// Round-robin over the SET, HEALTHY keys of one provider. Counter persisted.
+/// Ok(None) = no keys configured at all (caller keeps the env default).
+/// Err = keys exist but every one is cooling down or flagged.
+pub fn rotation_pick(provider: &str, keys: &[Value]) -> Result<Option<String>, String> {
+    let all: Vec<String> = keys
         .iter()
         .filter(|k| k.get("set").and_then(|v| v.as_bool()).unwrap_or(false))
         .filter_map(|k| k.get("env").and_then(|v| v.as_str()).map(String::from))
         .collect();
+    if all.is_empty() {
+        return Ok(None);
+    }
+    let usable: Vec<String> = all.iter().filter(|e| key_usable(e)).cloned().collect();
     if usable.is_empty() {
-        return None;
+        return Err(format!(
+            "every key for {} is cooling down or flagged — re-enable one in /admin",
+            provider
+        ));
     }
     let _g = ms_lock().lock().unwrap();
     let mut rot = read_json(crate::ROTATION_FILE, json!({}));
-    let idx = rot
-        .get(provider)
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as usize;
+    let idx = rot.get(provider).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let pick = usable[idx % usable.len()].clone();
     rot[provider] = json!((idx + 1) % usable.len());
     write_json(crate::ROTATION_FILE, &rot);
-    Some(pick)
+    Ok(Some(pick))
+}
+
+/// Round-robin over the SET keys of one provider. Counter persisted, tiny file.
+pub fn rotation_next(provider: &str, keys: &[Value]) -> Option<String> {
+    rotation_pick(provider, keys).ok().flatten()
+}
+
+/// Is there another healthy key besides `used` left for this provider?
+pub fn other_key_left(env_base: &str, used: &str) -> bool {
+    provider_keys(env_base).iter().any(|k| {
+        k.get("set").and_then(|v| v.as_bool()).unwrap_or(false)
+            && k.get("env").and_then(|v| v.as_str()) != Some(used)
+            && k.get("health").and_then(|v| v.as_str()) == Some("active")
+    })
 }
 
 /// Next free key slot for a provider (PROVIDER_API_KEY, _2, _3 ...).
