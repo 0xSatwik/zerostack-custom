@@ -133,7 +133,6 @@ only on the box, `chmod 600`):
 | --- | --- | --- | --- |
 | 100milionseek | deepseek-v4.1-flash-free | https://100milionseek.top/v1 | `HMS_API_KEY` |
 | howtofix | deepSeek-v4.1-flash-1017-sg | https://api.howtofix.id/v1 | `HOWTOFIX_API_KEY` |
-| inkling | thinkingmachines/Inkling-2-Mini | https://ekzhang--inkling2-mini.us-east.modal.run/v1 | `INKLING_API_KEY` |
 | moss | nex-n2.6 | https://api.mosi.cn/v1 | `MOSS_API_KEY` |
 | tokenlab | DeepSeek-V4.1-Flash | https://api.tokenlab.amd.com/v1 | `TOKENLAB_API_KEY` |
 | xingchi | gpt-6-astra, gpt-6.1-sol | https://api.xingchiapi.com/v1 | `XINGCHI_API_KEY` |
