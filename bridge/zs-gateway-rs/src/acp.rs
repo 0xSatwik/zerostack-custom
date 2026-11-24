@@ -1114,6 +1114,27 @@ pub fn sessions_list() -> Value {
     json!(out)
 }
 
+/// Recall deletion marker. The auto-digest updater deletes a digest ONLY
+/// when the session id is in this file — it is the proof the user actually
+/// deleted the chat (via /pi or the CLI). Without a marker, a missing
+/// session file means the file was LOST, and the digest is preserved.
+/// Written here, in delete_session, the single place a user deletion happens.
+const RECALL_DELETED_MARKER: &str = "/root/work/recall/digests/.deleted.json";
+
+fn mark_session_deleted(sid: &str) {
+    // Recall indexes by the short id (first 8 chars of the session id).
+    let short: String = sid.chars().take(8).collect();
+    let mut m: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(RECALL_DELETED_MARKER)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    m.insert(short, serde_json::json!(crate::util::now()));
+    if let Ok(txt) = serde_json::to_string(&serde_json::Value::Object(m)) {
+        let _ = std::fs::write(RECALL_DELETED_MARKER, txt + "\n");
+    }
+}
+
 pub fn delete_session(sid: &str) -> bool {
     let s = sessions().lock().unwrap().remove(sid);
     if let Some(s) = s {
@@ -1131,6 +1152,9 @@ pub fn delete_session(sid: &str) -> bool {
     for suffix in [".json", ".json.tmp", ".events.jsonl", ".log"] {
         let _ = std::fs::remove_file(format!("{}/{}{}", crate::SESS_DIR, sid, suffix));
     }
+    // Record the explicit user deletion so auto-digest knows this one is
+    // really gone (vs a session file lost by the store, whose digest stays).
+    mark_session_deleted(sid);
     true
 }
 
