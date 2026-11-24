@@ -4,6 +4,12 @@
 //! password (the same two that unlock /pi and /admin). A session cookie keeps
 //! the user logged in. The VNC iframe only renders after login.
 //!
+//! The noVNC viewer (/browser-vnc/*) is ALSO gated here: the tunnel routes
+//! /browser-vnc* to this port (6081), not straight to websockify (6080), so
+//! a direct hit on /browser-vnc/vnc.html without a session gets a redirect
+//! to the login instead of the desktop. Authed requests are proxied raw to
+//! websockify (HTTP assets and the WebSocket VNC channel alike).
+//!
 //! Stop/Start run /data/workspace/stop-browser.sh and
 //! /data/workspace/browser-stack.sh (both must exist and be executable —
 //! they were missing, which is why the buttons silently did nothing).
@@ -23,6 +29,9 @@ const PASS_HASH_FILE: &str = "/data/workspace/browser-pass-hash.txt";
 const STOP_SCRIPT: &str = "/data/workspace/stop-browser.sh";
 const START_SCRIPT: &str = "/data/workspace/browser-stack.sh";
 const BROWSER_PORT: u16 = 9377;
+/// websockify / noVNC backend. Reached only through the auth gate below —
+/// the tunnel must route /browser-vnc* here (6081), never straight to 6080.
+const VNC_BACKEND: &str = "127.0.0.1:6080";
 
 // ---------------------------------------------------------------- auth ---
 
@@ -94,6 +103,27 @@ fn authed(req: &Request, sessions: &Sessions) -> bool {
         }
     }
     if let Some(auth) = req.header("authorization") {
+        if let Some(tok) = auth.strip_prefix("Bearer ") {
+            return check_password(tok.trim());
+        }
+    }
+    false
+}
+
+/// Same auth check, but over raw request headers (for the /browser-vnc
+/// proxy, which forwards bytes before any HTTP parsing happens).
+fn authed_headers(headers: &HashMap<String, String>, sessions: &Sessions) -> bool {
+    if let Some(cookie) = headers.get("cookie") {
+        for part in cookie.split(';') {
+            let part = part.trim();
+            if let Some(tok) = part.strip_prefix("bsess=") {
+                if sessions.lock().map(|s| s.contains(tok)).unwrap_or(false) {
+                    return true;
+                }
+            }
+        }
+    }
+    if let Some(auth) = headers.get("authorization") {
         if let Some(tok) = auth.strip_prefix("Bearer ") {
             return check_password(tok.trim());
         }
@@ -206,7 +236,7 @@ impl Response {
     }
 }
 
-fn read_request(r: &mut BufReader<TcpStream>) -> Option<Request> {
+fn read_request(r: &mut impl BufRead) -> Option<Request> {
     let mut line = String::new();
     loop {
         line.clear();
@@ -260,6 +290,129 @@ fn status_text(code: u16) -> &'static str {
     }
 }
 
+/// Read raw bytes until the end of the HTTP header block (`\r\n\r\n`).
+/// Returns the head bytes (including the terminator) plus any bytes already
+/// read past it (start of the body). Used to peek the first request so
+/// /browser-vnc can be routed to the auth-gated proxy before any parsing.
+fn read_head(r: &mut TcpStream) -> Option<(Vec<u8>, Vec<u8>)> {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match r.read(&mut chunk) {
+            Ok(0) => return None,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = find_subslice(&buf, b"\r\n\r\n") {
+                    let end = pos + 4;
+                    let extra = buf[end..].to_vec();
+                    buf.truncate(end);
+                    return Some((buf, extra));
+                }
+                if buf.len() > 64 * 1024 {
+                    return None; // absurdly large head; not a request we serve
+                }
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Parse a raw header block into (method, target, headers). Returns None
+/// when the block is not a well-formed request line + headers.
+fn parse_head(head: &[u8]) -> Option<(String, String, HashMap<String, String>)> {
+    let text = String::from_utf8_lossy(head);
+    let mut lines = text.lines();
+    let first = lines.next()?;
+    let mut parts = first.split_whitespace();
+    let method = parts.next()?.to_string();
+    let target = parts.next()?.to_string();
+    let mut headers = HashMap::new();
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
+        }
+    }
+    Some((method, target, headers))
+}
+
+/// Auth-gated raw proxy to websockify (6080) for /browser-vnc/*. Forwards
+/// the already-read head + any body bytes, then copies bytes both ways
+/// until either side closes. This covers both the noVNC static assets
+/// (plain HTTP) and the VNC WebSocket channel (after the 101 upgrade the
+/// stream is just bytes, so a raw copy is exactly right).
+fn proxy_vnc(
+    mut client: TcpStream,
+    head: &[u8],
+    extra: &[u8],
+    sessions: &Sessions,
+) {
+    let (_, target, headers) = match parse_head(head) {
+        Some(t) => t,
+        None => return,
+    };
+    let _ = target;
+    if !authed_headers(&headers, sessions) {
+        // Not logged in: send them to the login page instead of the desktop.
+        let body = b"<html><body><a href=\"/browser\">Login to the browser</a></body></html>";
+        let resp = format!(
+            "HTTP/1.1 302 Found\r\nLocation: /browser\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = client.write_all(resp.as_bytes());
+        let _ = client.write_all(body);
+        let _ = client.flush();
+        return;
+    }
+    let mut backend = match TcpStream::connect(VNC_BACKEND) {
+        Ok(s) => s,
+        Err(_) => {
+            let body = b"browser backend unavailable";
+            let resp = format!(
+                "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = client.write_all(resp.as_bytes());
+            let _ = client.write_all(body);
+            let _ = client.flush();
+            return;
+        }
+    };
+    let _ = backend.set_nodelay(true);
+    let _ = client.set_nodelay(true);
+    // Forward the request we already read (head + any body bytes that
+    // arrived with it) to websockify, then copy the rest both ways.
+    if backend.write_all(head).is_err() || backend.write_all(extra).is_err() {
+        return;
+    }
+    // Bidirectional copy. Each direction runs on its own thread; the first
+    // side to hit EOF/error ends the session.
+    let mut c2b = match client.try_clone() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let mut b2c = match backend.try_clone() {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let t1 = std::thread::spawn(move || {
+        let _ = std::io::copy(&mut c2b, &mut backend);
+        let _ = backend.shutdown(std::net::Shutdown::Both);
+    });
+    let t2 = std::thread::spawn(move || {
+        let _ = std::io::copy(&mut b2c, &mut client);
+        let _ = client.shutdown(std::net::Shutdown::Both);
+    });
+    let _ = t1.join();
+    let _ = t2.join();
+}
+
 fn serve(addr: &str, sessions: Sessions) -> std::io::Result<()> {
     let listener = TcpListener::bind(addr)?;
     eprintln!("browser-control listening on {}", addr);
@@ -272,12 +425,30 @@ fn serve(addr: &str, sessions: Sessions) -> std::io::Result<()> {
         std::thread::spawn(move || {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
             let _ = stream.set_nodelay(true);
-            let read_half = match stream.try_clone() {
+            let mut read_half = match stream.try_clone() {
                 Ok(s) => s,
                 Err(_) => return,
             };
             let mut out = stream;
-            let mut r = BufReader::new(read_half);
+            // Peek the first request head: /browser-vnc/* goes to the
+            // auth-gated raw proxy; everything else runs the HTTP loop,
+            // seeded with the bytes already read so nothing is lost.
+            let (head, extra) = match read_head(&mut read_half) {
+                Some(t) => t,
+                None => return,
+            };
+            let target = match parse_head(&head) {
+                Some((_, t, _)) => t,
+                None => return,
+            };
+            if target.starts_with("/browser-vnc") {
+                drop(out);
+                proxy_vnc(read_half, &head, &extra, &sessions);
+                return;
+            }
+            let mut seeded = head;
+            seeded.extend_from_slice(&extra);
+            let mut r = BufReader::new(std::io::Cursor::new(seeded).chain(read_half));
             loop {
                 let req = match read_request(&mut r) {
                     Some(q) => q,
