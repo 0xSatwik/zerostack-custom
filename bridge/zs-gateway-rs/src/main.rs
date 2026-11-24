@@ -103,27 +103,6 @@ fn gw_env_write(key: &str, val: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Atomic-ish rewrite of provider-keys.env keeping unknown lines intact.
-fn keys_file_lines() -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    if let Ok(text) = std::fs::read_to_string(models::KEYS_FILE) {
-        for line in text.lines() {
-            if let Some((k, v)) = line.trim().split_once('=') {
-                out.push((k.trim().to_string(), v.trim().to_string()));
-            }
-        }
-    }
-    out
-}
-fn keys_file_write(lines: &[(String, String)]) -> bool {
-    let body: String = lines.iter().map(|(k, v)| format!("{}={}\n", k, v)).collect();
-    if std::fs::write(models::KEYS_FILE, body).is_err() {
-        return false;
-    }
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(models::KEYS_FILE, std::fs::Permissions::from_mode(0o600));
-    true
-}
 
 // ---- endpoint helpers -----------------------------------------------------
 fn monid_status() -> Value {
