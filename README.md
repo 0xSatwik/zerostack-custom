@@ -137,9 +137,9 @@ You
   |
   v
 Muse (your VM) — plans, talks to you, verifies
-  |  zs.py (delegation client)         |  browser CLI (Rust)
+  |  zs (delegation client, Rust)      |  browser control (Rust)
   v                                     v
-Altare: Tailscale tailnet (100.x)       Instabox: Playwright MCP (Camoufox)
+Altare: Tailscale tailnet (100.x)       Instabox: camofox-browser (Node, :9377)
   |  SOCKS5 relay (Altare has no /dev/net/tun)
   v
 Zerostack gateway (Rust, tmux `zs-gateway`, :8766)
@@ -153,9 +153,16 @@ Zerostack 1.8.6 on the free box (Altare sandbox "pi")
 
 **Tailscale:** Altare has no `/dev/net/tun`, so tailscaled runs
 `--tun=userspace-networking` + `-socks5-server=localhost:1055`
-(tmux `tailscaled`); a relay (`tailnet-relay.py`, tmux
+(tmux `tailscaled`); a Rust relay (`bridge/tailnet-relay-rs/`, tmux
 `tailnet-relay`) forwards `127.0.0.1:8931/6081/6080` to the Instabox
 machine. Ordinary Altare processes CANNOT dial Tailscale IPs directly.
+tailscaled uses a custom socket (`/root/tailscale/tailscaled.sock`);
+a symlink from the default `/var/run/tailscale/tailscaled.sock` keeps
+the `tailscale` CLI working. If the Instabox shows offline in
+Tailscale after a resume, restart its tailscaled — it sometimes fails
+to reconnect on its own. Port 8931's backend (old Playwright MCP) is
+dead; the live browser is camofox on 9377, reached via the
+browser-control page on 6081.
 
 **Tunnel:** named tunnel `hardeepwalia` gives the permanent URL.
 The DNS record for the tunnel hostname MUST be proxied (orange cloud);
@@ -204,12 +211,21 @@ in `skills/web-research/`:
 ## Known limits (honest, not hidden)
 
 - **The gateway is single-threaded.** One long/stuck Zerostack task
-  blocks `/health` and all page API calls. Killing a stuck ACP process
-  does NOT unblock it — the broken session files must be deleted AND
-  the gateway restarted. A real non-blocking fix is still open.
-- **Zerostack subagents PANIC in ACP mode** (`SubagentConfig not
-  initialized`). Subagents work in the TUI only, not through `/pi`.
-  This is a Zerostack-source bug, not fixed.
+  can still block page API calls. `/health` is lock-free since
+  2026-11-24 (an atomic running-count, guarded so a stop mid-turn
+  can't leak it) — it answers even during a turn. Killing a stuck ACP
+  process does NOT unblock a stuck turn — the broken session files
+  must be deleted AND the gateway restarted. A real non-blocking fix
+  is still open.
+- **Zerostack subagents in ACP mode — FIXED 2026-11-24.** They used
+  to panic (`SubagentConfig not initialized`) because ACP never called
+  the init the TUI path runs. A 33-line patch in
+  `src/extras/acp/mod.rs` (saved as
+  `zerostack/subagent-acp-init.patch`) initializes it in ACP `serve()`,
+  and the binary is built with `--features advisor,hooks,loop,acp`
+  (see `zerostack/BUILD-NOTES.md` — default features alone drop
+  `--acp` and the binary exits immediately). Live-verified: a `/pi`
+  session's task tool ran a subagent and returned a result, no panic.
 - **Vault MCP works in the TUI only.** ACP mode never loads MCP
   servers (`mcp_manager: None`). The gateway drives the browser via
   the Rust `browser` CLI instead.
@@ -232,11 +248,15 @@ Sessions are recalled via the recall system, NOT by loading full
 transcripts: `recall/index.jsonl` (one line per session) +
 `recall/digests/<id>.md` (~200-400 tokens each) +
 `recall/lessons/<slug>.md` (one file per lesson). The auto-updater
-runs in tmux `recall-auto` on the box (every 6h) but is currently
-STOPPED — do not restart it until it distinguishes user-deleted
-sessions from lost ones, else it deletes the surviving digests of the
-lost sessions. `muse-main` digest is updated by Muse after important
-work. Full guide: `recall/SKILL.md`.
+runs in tmux `recall-auto` on the box (every 6h) as a Rust binary
+(`bridge/auto-digest-rs/`, ported from `auto_digest.py`). It has a
+deletion guard: a digest is removed ONLY when the session id is in
+`digests/.deleted.json`, which the gateway writes when a session is
+explicitly deleted. A session file that is merely LOST (no marker)
+keeps its digest — that is how the old standing sessions' digests
+survived after their files vanished from the gateway store.
+`muse-main` digest is updated by Muse after important work. Full
+guide: `recall/SKILL.md`.
 
 ## Verify the whole setup
 
@@ -293,21 +313,29 @@ bridge/
   zs.html            the /pi chat page (single self-contained file)
   zs-gateway.py      Python gateway (supervisor fallback only)
   zs-supervise.sh    respawn loop (runs Rust binary if present)
-  zs.py              Muse-side delegation client (ask/list/new/show/status)
-  browser-cli-rs/    Rust CLI for the Playwright MCP browser (binary: browser)
-  browser-control.py the /browser control page + Stop/Start (Instabox)
+  zs-rs/             Rust delegation client (binary: zs; ask/list/new/show/status)
+  browser-control-rs/ Rust /browser control page + Stop/Start (Instabox)
   browser.md         the browser skill prompt (Zerostack)
   session-report.py  session inspector (lists sessions, --model filter)
-  tailnet-relay.py   SOCKS5 relay Altare -> Instabox (Tailscale)
+  tailnet-relay-rs/  Rust SOCKS5 relay Altare -> Instabox (Tailscale)
+  watcher-rs/        Rust inbox watcher (tmux pi-bridge, every 5s)
+  search-rs/         Rust search/fetch (TinyFish + Bing + X; binary: search)
+  recall-rs/         Rust recall CLI (find/digest/lesson/lessons/sessions)
+  auto-digest-rs/    Rust recall auto-updater (tmux recall-auto, every 6h)
 recall/
   index.jsonl        one line per session
   digests/           ~200-400 token summaries per session
   lessons/           one file per learned mistake
-  recall.py          CLI (find/digest/lesson/lessons/sessions)
-  auto_digest.py     auto-updater (tmux recall-auto, every 6h)
+  recall.py          Python recall CLI (reference; live one is Rust)
+  auto_digest.py     Python auto-updater (reference; live one is Rust)
 search/
-  web.py             free search/fetch (TinyFish + Bing + X)
+  web.py             free search/fetch (TinyFish + Bing + X) — still the
+                     documented tool; the Rust binary is live alongside it
   SEARCH.md          search system notes
+zerostack/
+  subagent-acp-init.patch  the ACP subagent-init fix (33 lines, live-verified)
+  BUILD-NOTES.md     how to build Zerostack (feature set, mold, the patch)
+  config.toml.example  Zerostack config template (placeholders only)
 skills/
   web-research.md    the research skill
   hallmark.md        design skill (Taste Skill)
@@ -318,8 +346,6 @@ workers/
 prompts/
   browser.md         browser skill prompt (Zerostack)
   recall.md          recall skill prompt (Zerostack)
-config/
-  config.toml.example  Zerostack config template (placeholders only)
 ```
 
 ## Companion repos
