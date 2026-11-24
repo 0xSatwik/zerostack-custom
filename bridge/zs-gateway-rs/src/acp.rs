@@ -790,6 +790,7 @@ pub fn run_turn(s: &Arc<Session>, text: &str) {
     {
         let mut st = s.lock();
         st.running = true;
+        RUNNING_COUNT.fetch_add(1, Ordering::SeqCst);
         st.turn = None;
         st.last_assistant.clear();
         st.messages.push(json!({
@@ -958,6 +959,7 @@ pub fn run_turn(s: &Arc<Session>, text: &str) {
     {
         let mut st = s.lock();
         st.running = false;
+        RUNNING_COUNT.fetch_sub(1, Ordering::SeqCst);
         st.turn = None;
         st.mtime = now();
         if st.closed || st.deleted {
@@ -1179,5 +1181,12 @@ pub fn shutdown_all() {
 }
 
 pub fn any_running() -> usize {
-    sessions().lock().unwrap().values().filter(|s| s.lock().running).count()
+    // Lock-free: /health must answer even when a turn holds a session lock
+    // or the sessions map is contended. The counter is bumped in run_turn
+    // (exactly once per turn: +1 at start, -1 at end, no early returns).
+    RUNNING_COUNT.load(Ordering::SeqCst)
 }
+
+/// Lock-free count of sessions with a turn in flight. Kept in sync by
+/// run_turn only; a stale count is cosmetic (/health), never load-bearing.
+static RUNNING_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
