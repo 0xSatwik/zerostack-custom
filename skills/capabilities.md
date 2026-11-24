@@ -22,8 +22,7 @@ Read this at session start. It lists what is actually switched on, so the agent 
 - In /pi (ACP/gateway) sessions there is no MCP: use the browser CLI and the vault CLI instead.
 
 ## Providers (models.json + config.toml, /admin Models section)
-- Default: 100milionseek/deepseek-v4.1-flash-free. Fallback order: DeepSeek, howtofix, inkling, moss, tokenlab, xingchi.
-- **inkling** — same model via the Modal endpoint. Known rig parse issue on tool calls (reasoning_content + tool_calls).
+- Default: 100milionseek/deepseek-v4.1-flash-free. Fallback order: DeepSeek, howtofix, moss, tokenlab, xingchi.
 - xingchi returns 403 in Zerostack (provider admits named clients only). Providers are flaky (100milionseek 502s, tokenlab 429s) — a provider fault, not an integration fault.
 
 ## Tools
