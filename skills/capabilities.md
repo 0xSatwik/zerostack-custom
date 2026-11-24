@@ -21,8 +21,14 @@ Read this at session start. It lists what is actually switched on, so the agent 
 - vault: Cloudflare Worker vault (service_request, server-side key injection). The agent never sees a key value. Works in the Zerostack TUI only.
 - In /pi (ACP/gateway) sessions there is no MCP: use the browser CLI and the vault CLI instead.
 
+## Providers (models.json + config.toml, /admin Models section)
+- Default: 100milionseek/deepseek-v4.1-flash-free. Fallback order: DeepSeek, howtofix, kern, inkling, moss, tokenlab, xingchi.
+- **kern** — `thinkingmachines/inkling-2-mini` via https://api.kern-llm.org/v1 (free, single GPU). Online only **10:30–19:30 IST**; 2 concurrent / 18 RPM; returns 502 when the box is down (gateway retries, then falls back). Reasoning model: global `max_tokens = 65536` in config.toml, so the thinking budget is never starved (a low cap returns empty content). Cloudflare blocks Python urllib's default User-Agent; Zerostack's reqwest UA passes.
+- **inkling** — same model via the Modal endpoint. Known rig parse issue on tool calls (reasoning_content + tool_calls); Kern is preferred for this model.
+- xingchi returns 403 in Zerostack (provider admits named clients only). Providers are flaky (100milionseek 502s, tokenlab 429s) — a provider fault, not an integration fault.
+
 ## Tools
-- File read/write/edit, shell commands, search (web.py research), and the tools Zerostack exposes in this session. Subagents (the task tool) do NOT work in ACP mode — they panic; do everything directly.
+- File read/write/edit, shell commands, search (the Rust `search` binary on the box, same CLI as web.py), and the tools Zerostack exposes in this session. Subagents (the task tool) DO work in ACP mode now (fixed 2026-11-24, subagent ACP-init patch) — use them for parallel work.
 - Model: the session model is set at creation. Fallback order is configured in config.toml; a provider 503/429/502 is retried after Retry-After, then falls to the next provider.
 
 ## Rules that always apply
