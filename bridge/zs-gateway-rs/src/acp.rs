@@ -26,6 +26,9 @@ pub const ACP_PORT_SPAN: u16 = 100;
 pub const TURN_TIMEOUT: Duration = Duration::from_secs(3600);
 pub const PREAMBLE_MAX: usize = 12000;
 pub const IDLE_REAP_SECS: f64 = 900.0;
+/// How many times a transient provider failure (503 / 429 / 502) is retried
+/// against the SAME model before the fallback chain takes over.
+pub const TRANSIENT_RETRIES: u32 = 3;
 
 struct Conn {
     stream: Mutex<TcpStream>,
@@ -438,6 +441,28 @@ fn spawn_proc(s: &Arc<Session>, forced_model: &str) -> Result<(), String> {
     if let Some(m) = &model {
         cmd.arg("--model").arg(m);
     }
+    // Feature toggles -> spawn flags. features.json is the single source; a
+    // feature the user turned off is actively disabled here rather than left
+    // to a config default.
+    if crate::feature_on("hooks") {
+        // hooks are on by default in zerostack; nothing to pass
+    } else {
+        cmd.arg("--no-hooks");
+    }
+    if crate::feature_on("advisor") {
+        cmd.arg("--advisor");
+        if let Some(am) = cfg
+            .get("advisor")
+            .and_then(|a| a.get("model"))
+            .and_then(|v| v.as_str())
+        {
+            cmd.arg("--advisor-model").arg(am);
+        }
+    }
+    if crate::feature_on("status_signals") {
+        cmd.arg("--status-socket")
+            .arg(format!("{}/{}.status.sock", crate::SESS_DIR, s.id));
+    }
     cmd.current_dir(&s.cwd).stdin(Stdio::null());
 
     let logpath = format!("{}/{}.log", crate::SESS_DIR, s.id);
@@ -663,6 +688,94 @@ fn drop_empty_turn(s: &Arc<Session>) {
     }
 }
 
+/// A provider 5xx/429 does not reach us as a JSON-RPC error: zerostack replies
+/// with a successful `session/prompt` result carrying stopReason "refusal" and
+/// streams the failure to the client as an `[error: ...]` message chunk. So the
+/// retry decision has to be made from the turn body, not from `rpc`'s Result.
+fn refusal_is_failure(msg: &Value) -> bool {
+    msg.get("result")
+        .and_then(|r| r.get("stopReason"))
+        .and_then(|v| v.as_str())
+        .map(|r| r == "refusal" || r == "error")
+        .unwrap_or(false)
+}
+
+/// How long the provider asked us to wait, in seconds (default 20).
+fn retry_after_secs(text: &str) -> u64 {
+    let m = text.to_lowercase();
+    for key in ["\"retry_after_s\":", "retry_after_s=", "retry-after:"] {
+        if let Some(i) = m.find(key) {
+            let tail = &m[i + key.len()..];
+            let digits: String = tail
+                .trim_start_matches(' ')
+                .trim_start_matches('"')
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if let Ok(n) = digits.parse::<u64>() {
+                if n > 0 && n <= 600 {
+                    return n;
+                }
+            }
+        }
+    }
+    20
+}
+
+/// Is this provider error worth retrying against the SAME model (busy upstream,
+/// rate limit, gateway hiccup)? Anything else is a model/key problem and should
+/// go straight to the fallback chain.
+fn transient_failure(text: &str) -> bool {
+    let m = text.to_lowercase();
+    let has = |s: &str| m.contains(s);
+    has("status 503")
+        || has("status 502")
+        || has("status 429")
+        || has("status 500")
+        || has("service unavailable")
+        || has("upstream_busy")
+        || has("too many requests")
+        || has("at capacity")
+        || has("rate limit")
+}
+
+/// Everything the failed attempt wrote into the transcript, so it can be shown
+/// in one clean retry line and then discarded.
+fn attempt_text(s: &Arc<Session>, mark: usize) -> String {
+    let st = s.lock();
+    let mut out = String::new();
+    for m in st.messages.iter().skip(mark) {
+        if let Some(arr) = m.get("content").and_then(|v| v.as_array()) {
+            for b in arr {
+                if let Some(t) = b.get("text").and_then(|v| v.as_str()) {
+                    out.push_str(t);
+                }
+            }
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Roll the transcript back to before a failed attempt, so a retry does not
+/// leave three copies of the same provider error in the user's chat.
+fn drop_failed_attempt(s: &Arc<Session>, mark: usize) {
+    let mut st = s.lock();
+    if st.messages.len() > mark {
+        st.messages.truncate(mark);
+    }
+    st.turn = None;
+    st.last_assistant.clear();
+}
+
+fn one_line(text: &str, max: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        flat
+    } else {
+        format!("{}…", flat.chars().take(max).collect::<String>())
+    }
+}
+
 fn note_delta(s: &Arc<Session>, text: &str) {
     {
         let mut st = s.lock();
@@ -710,6 +823,8 @@ pub fn run_turn(s: &Arc<Session>, text: &str) {
         // (auth / 429 / 5xx / timeout), mark it and run the SAME model again
         // with the provider's next healthy key before falling back on models.
         let mut attempts = 0;
+        // Transient (503/429/502) retries for THIS model, reset per candidate.
+        let mut transient = 0;
         loop {
             attempts += 1;
             let used_key = {
@@ -741,17 +856,54 @@ pub fn run_turn(s: &Arc<Session>, text: &str) {
                 "sessionId": acp_sid.unwrap_or_default(),
                 "prompt": [{"type": "text", "text": payload.clone()}],
             });
-            match rpc(&conn, "session/prompt", params, TURN_TIMEOUT) {
-                Ok(_) => {
+            // Where this attempt starts in the transcript, so a retry can
+            // discard the failed attempt's partial output instead of stacking
+            // three copies of the same provider error in the user's chat.
+            let mark = { s.lock().messages.len() };
+            let res = rpc(&conn, "session/prompt", params, TURN_TIMEOUT);
+            match res {
+                Ok(msg) if !refusal_is_failure(&msg) => {
                     if let Some(k) = &used_key {
                         models::mark_key_success(k);
                     }
                     ok = true;
                     break;
                 }
-                Err(e) => {
+                res => {
+                    // A refusal carries the provider error in the message
+                    // chunks it already streamed; a transport error carries it
+                    // in the Result. Both are the same thing to us here.
+                    let e = match &res {
+                        Ok(_) => {
+                            let t = attempt_text(s, mark);
+                            if t.is_empty() { "the provider refused the turn".to_string() } else { t }
+                        }
+                        Err(err) => err.clone(),
+                    };
                     last_err = e.clone();
                     log(&format!("session {}: model {} failed: {}", s.id, cand, e));
+
+                    // 503 / 429 / 502 from the provider: the request itself is
+                    // fine, the upstream is busy. Wait what it asked for and
+                    // run the same model again before burning a fallback slot.
+                    if transient_failure(&e) && transient < TRANSIENT_RETRIES {
+                        transient += 1;
+                        drop_failed_attempt(s, mark);
+                        // The zerostack session already recorded this prompt and
+                        // never got an assistant reply, so re-sending to the same
+                        // process would stack two user messages (providers reject
+                        // that). Respawn instead; `payload` above already carries
+                        // the replayed history, so no second digest is needed.
+                        kill_proc(s);
+                        let wait = retry_after_secs(&e).min(60);
+                        note_delta(s, &format!(
+                            "\n[{}: {} — retry {}/{} in {}s]\n",
+                            cand, one_line(&e, 160), transient, TRANSIENT_RETRIES, wait
+                        ));
+                        std::thread::sleep(Duration::from_secs(wait));
+                        continue;
+                    }
+
                     kill_proc(s);
                     // Take a bad key out of rotation and retry the same model
                     // with another key, if there is one left.
@@ -767,8 +919,11 @@ pub fn run_turn(s: &Arc<Session>, text: &str) {
                                     if models::other_key_left(&base, k) && attempts < 4 {
                                         note_delta(s, &format!(
                                             "\n[{}: key {} failed ({}) — retrying with the next key]\n",
-                                            cand, k, e
+                                            cand, k, one_line(&e, 160)
                                         ));
+                                        // A different key deserves its own
+                                        // transient budget.
+                                        transient = 0;
                                         retried = true;
                                     }
                                 }
@@ -779,7 +934,13 @@ pub fn run_turn(s: &Arc<Session>, text: &str) {
                         continue;
                     }
                     if i + 1 < chain.len() {
-                        note_delta(s, &format!("\n[{} failed: {} — trying {}]\n", cand, e, chain[i + 1]));
+                        note_delta(s, &format!(
+                            "\n[{} failed: {} — falling back to {}]\n",
+                            cand, one_line(&e, 160), chain[i + 1]
+                        ));
+                        // Start the next candidate in its own assistant block,
+                        // so the transcript shows which model produced what.
+                        s.lock().turn = None;
                     }
                     break;
                 }
