@@ -22,9 +22,8 @@ Read this at session start. It lists what is actually switched on, so the agent 
 - In /pi (ACP/gateway) sessions there is no MCP: use the browser CLI and the vault CLI instead.
 
 ## Providers (models.json + config.toml, /admin Models section)
-- Default: 100milionseek/deepseek-v4.1-flash-free. Fallback order: DeepSeek, howtofix, kern, inkling, moss, tokenlab, xingchi.
-- **kern** — `thinkingmachines/inkling-2-mini` via https://api.kern-llm.org/v1 (free, single GPU). Online only **10:30–19:30 IST**; 2 concurrent / 18 RPM; returns 502 when the box is down (gateway retries, then falls back). Reasoning model: global `max_tokens = 65536` in config.toml, so the thinking budget is never starved (a low cap returns empty content). Cloudflare blocks Python urllib's default User-Agent; Zerostack's reqwest UA passes.
-- **inkling** — same model via the Modal endpoint. Known rig parse issue on tool calls (reasoning_content + tool_calls); Kern is preferred for this model.
+- Default: 100milionseek/deepseek-v4.1-flash-free. Fallback order: DeepSeek, howtofix, inkling, moss, tokenlab, xingchi.
+- **inkling** — same model via the Modal endpoint. Known rig parse issue on tool calls (reasoning_content + tool_calls).
 - xingchi returns 403 in Zerostack (provider admits named clients only). Providers are flaky (100milionseek 502s, tokenlab 429s) — a provider fault, not an integration fault.
 
 ## Tools
