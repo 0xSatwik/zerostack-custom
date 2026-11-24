@@ -80,6 +80,20 @@ models, **make one the default**, test a model ("Say OK"), paste the
 **Monid key** (writes the box's Monid credentials file), and restart
 the gateway.
 
+**Feature toggles** live in the same Admin page (Features section,
+backed by `features.json` on the box): prompt chaining, advisor,
+lifecycle hooks, prompt-to-model mapping, status signals, and
+built-in memory. All are off by default except built-in memory.
+A feature that is off does not run. The agent reads
+`skills/capabilities.md` at session start, which lists the live
+feature states, tools, MCP servers, and search legs, so it knows
+its own capabilities instead of guessing.
+
+**Gateway resilience:** when a provider returns 503, 429, or 502,
+the gateway retries the same request after the Retry-After seconds
+(up to 3 times), then falls through to the next provider in the
+configured fallback order instead of failing the turn.
+
 **The chat page** (`/pi`) is a single self-contained HTML file
 (`bridge/zs.html`) served by the same gateway: session sidebar, full
 transcript with markdown, collapsible thinking and tool calls,
