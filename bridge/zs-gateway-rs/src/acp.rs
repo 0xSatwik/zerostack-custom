@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpStream};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -71,23 +71,11 @@ impl Session {
     pub fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.st.lock().unwrap_or_else(|e| e.into_inner())
     }
-    pub fn name(&self) -> String {
-        self.lock().name.clone()
-    }
     pub fn model(&self) -> String {
         self.lock().model.clone()
     }
     pub fn running(&self) -> bool {
         self.lock().running
-    }
-    pub fn live(&self) -> bool {
-        self.lock().proc.is_some()
-    }
-    pub fn msg_count(&self) -> usize {
-        self.lock().messages.len()
-    }
-    pub fn mtime(&self) -> f64 {
-        self.lock().mtime
     }
 }
 
