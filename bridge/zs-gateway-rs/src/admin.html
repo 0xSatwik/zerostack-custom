@@ -422,6 +422,28 @@ table.grid tr.def td{background:#0c0f14}
             </div>
             <p class="hint">Combined search inside the server (TinyFish free + cf-search Worker).</p>
           </div>
+          <div class="sec" id="featSec">
+            <h2>Features</h2>
+            <p class="hint" style="margin-top:0">Zerostack runtime features, read from <span class="mono">features.json</span>.
+              A feature is off unless you switch it on here; the gateway passes the matching flags when it starts a session.</p>
+            <div class="field tight" style="align-items:center">
+              <label class="chk"><input type="checkbox" id="ft_chaining"> Prompt chaining</label>
+              <label class="chk"><input type="checkbox" id="ft_advisor"> Advisor</label>
+              <label class="chk"><input type="checkbox" id="ft_hooks"> Hooks</label>
+              <div style="flex:0 0 auto"><button onclick="saveFeatures()">Save features</button></div>
+            </div>
+            <div class="field tight" style="align-items:center">
+              <label class="chk"><input type="checkbox" id="ft_prompt_to_model"> Prompt → model</label>
+              <label class="chk"><input type="checkbox" id="ft_status_signals"> Status signals</label>
+              <label class="chk"><input type="checkbox" id="ft_builtin_memory"> Built-in memory</label>
+            </div>
+            <p class="hint" id="featHint">Prompt chaining and prompt→model need a <span class="mono">[chain]</span> /
+              <span class="mono">prompt_to_model</span> section in config.toml. Hooks need a settings.json; leaving Hooks off
+              passes <span class="mono">--no-hooks</span>. Advisor needs an <span class="mono">[advisor]</span> model that
+              exists on one of your providers. Status signals write a Unix socket per session under zs-sessions/.</p>
+            <p class="hint" id="featOffHint">With <b>Built-in memory</b> off the box still injects MEMORY.md — this toggle is
+              recorded for the capabilities prompt, not enforced at spawn.</p>
+          </div>
           <div class="sec">
             <h2>Web search — worker URLs</h2>
             <p class="hint">The search workers are YOUR deployments. Paste each Worker URL here — no URL is stored in code. Empty means that leg is skipped.</p>
@@ -589,6 +611,7 @@ function saveTok(t){ try { localStorage.setItem("zsgtok", t); } catch(e){} }
 let TOK = getTok();
 let MS = { providers: [], models: [], order: [], default: "", fallback_enabled: true };
 let SC = {};
+let FEATS = {};
 let LOADED = null;
 
 function toast(m, ms){
@@ -676,8 +699,8 @@ function showLogin(){
 async function loadAll(){
   for (let attempt = 0; attempt < 2; attempt++) {
   try {
-    const [health, ms, keys, instabox, monid, sinfo] = await Promise.all([
-      api("/health"), api("/model-system"), api("/keys"), api("/instabox-key"), api("/monid"), api("/settings-info")]);
+    const [health, ms, keys, instabox, monid, sinfo, feats] = await Promise.all([
+      api("/health"), api("/model-system"), api("/keys"), api("/instabox-key"), api("/monid"), api("/settings-info"), api("/features")]);
     LOADED = true;
     const gate = $("pwgate"); if (gate) gate.remove();
     const lc = $("loginCard"); if (lc) lc.style.display = "none";
@@ -711,6 +734,14 @@ async function loadAll(){
     if ($("sc_backend")) $("sc_backend").value = sc.backend || "monid";
     renderApify(sc);
     renderApifyVis();
+    // Feature toggles from /features (features.json is the source of truth).
+    const FE = (feats && feats.features) || {};
+    FEATS = FE;
+    ["chaining", "advisor", "hooks", "prompt_to_model", "status_signals", "builtin_memory"].forEach(k => {
+      const el = $("ft_" + k);
+      if (el) el.checked = !!FE[k];
+    });
+    renderFeatureVis();
   } catch(e){
     if (attempt === 0) { await new Promise(r => setTimeout(r, 1200)); continue; }
     LOADED = null;
