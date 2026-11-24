@@ -1,0 +1,44 @@
+diff --git a/src/extras/acp/mod.rs b/src/extras/acp/mod.rs
+index 3acbc0e..4e2a4e0 100644
+--- a/src/extras/acp/mod.rs
++++ b/src/extras/acp/mod.rs
+@@ -126,6 +126,39 @@ pub async fn serve(cli: Cli, cfg: Config, context: ContextFiles) -> anyhow::Resu
+         sessions: Mutex::new(HashMap::new()),
+     });
+ 
++    // Subagents (task tool) need the global SubagentConfig initialized.
++    // The TUI path does this in Startup::init_features, which ACP never
++    // calls — so without this, any task-tool call panics with
++    // 'SubagentConfig not initialized'. Init once here from the same
++    // provider/model resolution run_prompt uses.
++    #[cfg(feature = "subagents")]
++    {
++        let provider_str = state.cli.resolve_provider(&state.cfg);
++        let mut model_str = state.cli.resolve_model(&state.cfg);
++        if (model_str.as_str() == "deepseek/deepseek-v4-pro" || state.cli.model.is_none())
++            && let Some(custom) = state.cfg.custom_providers_map().get(provider_str.as_str())
++            && let Some(ref custom_model) = custom.model
++        {
++            model_str = custom_model.clone();
++        }
++        if let Ok(sub_client) = crate::provider::create_client(
++            &provider_str,
++            None,
++            &state.cfg.custom_providers_map(),
++            state.cfg.api_keys.as_ref(),
++        ) {
++            crate::extras::subagents::init(
++                sub_client,
++                model_str.to_string(),
++                state.cfg.task_max_turns.unwrap_or(20),
++                std::sync::Arc::new(state.cfg.clone()),
++                state.cli.resolve_tools(&state.cfg),
++                #[cfg(feature = "archmd")]
++                state.context.architecture.clone(),
++            );
++        }
++    }
++
+     let builder = Agent.v1().name("zerostack");
+ 
+     let builder = builder
