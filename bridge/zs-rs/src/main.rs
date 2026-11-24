@@ -147,7 +147,10 @@ fn wait(sid: &str, secs: u64) -> serde_json::Value {
     let t0 = Instant::now();
     loop {
         let st = status(sid);
-        if !st.get("running").and_then(|r| r.as_bool()).unwrap_or(false) {
+        // A failed status fetch (gateway frozen/unreachable) is NOT "not
+        // running" — keep waiting until the timeout; otherwise a frozen
+        // gateway produces a false "completed" with no reply.
+        if st.get("_http_error").is_none() && !st.get("running").and_then(|r| r.as_bool()).unwrap_or(false) {
             return st;
         }
         if t0.elapsed().as_secs() >= secs {
