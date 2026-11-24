@@ -641,10 +641,6 @@ function show(pane){
 }
 
 /* ---------- login ---------- */
-async function saveTok(){
-  const v = $("tok") ? $("tok").value.trim() : "";
-  return unlock(v);
-}
 async function unlock(v){
   if (!v) return;
   if (/^[0-9a-f]{43}$/i.test(v)) { TOK = v; saveTok(TOK); return loadAll(); }
