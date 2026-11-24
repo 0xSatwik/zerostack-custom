@@ -126,16 +126,36 @@ below).
 
 ## Models
 
-Six providers, all OpenAI-compatible (keys never committed — they live
+Seven providers, all OpenAI-compatible (keys never committed — they live
 only on the box, `chmod 600`):
 
 | Provider | Model | Base URL | Key env var |
 | --- | --- | --- | --- |
 | 100milionseek | deepseek-v4.1-flash-free | https://100milionseek.top/v1 | `HMS_API_KEY` |
 | howtofix | deepSeek-v4.1-flash-1017-sg | https://api.howtofix.id/v1 | `HOWTOFIX_API_KEY` |
+| kern | thinkingmachines/inkling-2-mini | https://api.kern-llm.org/v1 | `KERN_API_KEY` |
+| inkling | thinkingmachines/Inkling-2-Mini | https://ekzhang--inkling2-mini.us-east.modal.run/v1 | `INKLING_API_KEY` |
 | moss | nex-n2.6 | https://api.mosi.cn/v1 | `MOSS_API_KEY` |
 | tokenlab | DeepSeek-V4.1-Flash | https://api.tokenlab.amd.com/v1 | `TOKENLAB_API_KEY` |
 | xingchi | gpt-6-astra, gpt-6.1-sol | https://api.xingchiapi.com/v1 | `XINGCHI_API_KEY` |
+
+**Kern LLM (added 2026-11-24)** is the live host for
+`thinkingmachines/inkling-2-mini` — a free single-GPU box behind
+Cloudflare, same model as the `inkling` (Modal) provider but a
+different host, and the one Zerostack prefers for this model (it sits
+before `inkling` in the fallback order). Know its limits before using
+it: online only **10:30–19:30 IST** (13:00–22:00 UTC+8); **2
+concurrent requests / 18 RPM**; it returns **502 when the box is
+down** (the gateway retries after Retry-After, then falls back — a
+502 here means the box is off, not your code). It is a **reasoning
+model**: it spends output tokens thinking, and a low `max_tokens`
+returns empty content — the config sets `max_tokens = 65536`
+globally, so the budget is never starved. Cloudflare blocks Python
+urllib's default User-Agent (403 error 1010); Zerostack's reqwest UA
+passes (verified live: a dummy-key probe returned 401, not 403).
+Always probe `GET /v1/models` **and** one small chat call before real
+work — `/v1/models` can return 200 while inference is 502. Full
+guide: the Kern LLM guide in the user's files (no real key in it).
 
 Keys go in **two** places on the box (both `chmod 600`):
 `/root/pi-bridge/provider-keys.env` (the gateway reads this at start)
