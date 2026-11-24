@@ -958,8 +958,13 @@ pub fn run_turn(s: &Arc<Session>, text: &str) {
     drop_empty_turn(s);
     {
         let mut st = s.lock();
-        st.running = false;
-        RUNNING_COUNT.fetch_sub(1, Ordering::SeqCst);
+        // Decrement only on the true->false transition: stop_session may
+        // have already stopped this turn (and decremented), so a blind
+        // fetch_sub here would double-decrement and leak the count low.
+        if st.running {
+            st.running = false;
+            RUNNING_COUNT.fetch_sub(1, Ordering::SeqCst);
+        }
         st.turn = None;
         st.mtime = now();
         if st.closed || st.deleted {
@@ -1163,7 +1168,12 @@ pub fn stop_session(s: &Arc<Session>) -> bool {
     kill_proc(s);
     {
         let mut st = s.lock();
-        st.running = false;
+        // Same guard as run_turn's end: only the true->false transition
+        // decrements, so a concurrent run_turn end can't double-count.
+        if st.running {
+            st.running = false;
+            RUNNING_COUNT.fetch_sub(1, Ordering::SeqCst);
+        }
         st.turn = None;
         st.needs_preamble = true;
         st.mtime = now();
