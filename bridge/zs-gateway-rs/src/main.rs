@@ -166,6 +166,20 @@ fn save_monid(key: &str) -> bool {
 // ---- vault Worker URL (the user's own, never hardcoded) -------------------
 pub const VAULT_FILE: &str = "/root/pi-bridge/vault-url.txt";
 pub const SEARCH_FILE: &str = "/root/pi-bridge/search.json";
+pub const FEATURES_FILE: &str = "/root/pi-bridge/features.json";
+
+// Feature toggles the gateway owns. Search legs live in search.json; these are
+// the Zerostack runtime features the user can switch on/off from /admin. The
+// capabilities prompt and the spawn flags both read this file, so it is the
+// only place a state is declared.
+pub const FEATURE_KEYS: [&str; 6] = [
+    "chaining",
+    "advisor",
+    "hooks",
+    "prompt_to_model",
+    "status_signals",
+    "builtin_memory",
+];
 
 fn set_mode_600(path: &str) {
     use std::os::unix::fs::PermissionsExt;
@@ -408,6 +422,55 @@ fn save_search_cfg(b: &Value) -> Result<Value, String> {
         .map_err(|e| format!("could not save the search settings: {}", e))?;
     set_mode_600(SEARCH_FILE);
     Ok(search_cfg())
+}
+
+// ---- feature toggles ------------------------------------------------------
+// Stored in features.json, mirrored exactly from the search settings shape so
+// there is one pattern to read. `builtin_memory` defaults on (the box already
+// injects MEMORY.md); every other feature defaults off, so a fresh deploy
+// never turns on a behaviour the user has not asked for.
+fn feature_file_raw() -> Value {
+    std::fs::read_to_string(FEATURES_FILE)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| json!({}))
+}
+
+pub fn feature_on(key: &str) -> bool {
+    let default = key == "builtin_memory";
+    feature_file_raw()
+        .get(key)
+        .and_then(|x| x.as_bool())
+        .unwrap_or(default)
+}
+
+fn feature_cfg() -> Value {
+    let mut out = serde_json::Map::new();
+    for k in FEATURE_KEYS {
+        out.insert(k.to_string(), json!(feature_on(k)));
+    }
+    json!({
+        "features": Value::Object(out),
+        "file": FEATURES_FILE,
+        "note": "generated from the live features.json — this file is the only place a toggle is declared",
+    })
+}
+
+fn save_feature_cfg(b: &Value) -> Result<Value, String> {
+    // Merge into the raw file so unknown keys written by other tools survive.
+    let mut cur = feature_file_raw();
+    let src = b.get("features").unwrap_or(b);
+    for k in FEATURE_KEYS {
+        if let Some(v) = src.get(k).and_then(|x| x.as_bool()) {
+            cur[k] = json!(v);
+        }
+    }
+    let body = serde_json::to_string_pretty(&cur).unwrap_or_else(|_| "{}".to_string());
+    std::fs::write(FEATURES_FILE, format!("{}\n", body))
+        .map_err(|e| format!("could not save the feature toggles: {}", e))?;
+    set_mode_600(FEATURES_FILE);
+    Ok(feature_cfg())
 }
 
 // ---- Apify keys + actors (user's own, added via /admin) --------------------
@@ -983,6 +1046,7 @@ fn handle(app: &Arc<App>, req: &http::Request) -> http::Response {
                     return json_ok(json!({"defaultProvider": p, "defaultModel": m}));
                 }
                 "/settings-info" => return json_ok(settings_info()),
+                "/features" => return json_ok(feature_cfg()),
                 "/switch" => {
                     return json_ok(json!({
                         "backend": "zerostack",
@@ -1108,6 +1172,14 @@ fn handle(app: &Arc<App>, req: &http::Request) -> http::Response {
                 }
                 return match save_search_cfg(&b) {
                     Ok(_) => json_ok(json!({"ok": true, "monid_set": monid_status()["set"].clone()})),
+                    Err(e) => json_err(400, &e),
+                };
+            }
+            // Feature toggles -> features.json. Merged, never wiped, so a
+            // field another tool owns is left alone.
+            "/features" => {
+                return match save_feature_cfg(&body) {
+                    Ok(v) => json_ok(json!({"ok": true, "features": v["features"].clone()})),
                     Err(e) => json_err(400, &e),
                 };
             }
