@@ -2,7 +2,7 @@
 # Replace every $VAR / YOUR-* placeholder with your own values.
 # Keys are NEVER in this file — they come from environment variables only.
 #   HMS_API_KEY, XINGCHI_API_KEY, TOKENLAB_API_KEY, MOSS_API_KEY,
-#   HOWTOFIX_API_KEY, INKLING_API_KEY: your model provider
+#   HOWTOFIX_API_KEY: your model provider
 #   keys, as env vars on the box.
 #   VAULT_AGENT_TOKEN: a request-only token for your vault MCP server.
 #   YOUR-VAULT-WORKER: your own vault Worker hostname (see below).
