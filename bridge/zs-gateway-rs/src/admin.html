@@ -179,7 +179,7 @@ table.grid tr.def td{background:#0c0f14}
   /* every control is thumb-reachable: 44px minimum */
   button{min-height:44px;padding:10px 14px}
   button.primary{min-height:44px}
-  input,select,textarea{min-height:44px;padding:10px 10px;font-size:15px}
+  input,select,textarea{min-height:44px;padding:10px 10px;font-size:16px}
   .rowbtns button{min-height:44px;padding:10px 12px}
   .sidefoot button{min-height:44px}
   /* fields and cards go full-width, no horizontal overflow */
@@ -372,7 +372,7 @@ table.grid tr.def td{background:#0c0f14}
             <h2>API keys</h2>
             <div id="keySlots"></div>
             <div class="field" style="margin-top:10px">
-              <div><label for="ks_provider">Provider</label><input id="ks_provider" class="mono" placeholder="openrouter"></div>
+              <div><label for="ks_provider">Provider</label><select id="ks_provider" class="mono"></select></div>
               <div><label for="ks_key">New key</label><input id="ks_key" type="password" class="mono" placeholder="sk-… (write-only)"></div>
               <div style="flex:0 0 auto;align-self:flex-end"><button onclick="addProviderKey()">Add key</button></div>
             </div>
@@ -951,6 +951,12 @@ async function setFallback(){ toast("Use the fallback toggle in Models"); }
 /* ---------- providers ---------- */
 function renderProviders(ms){
   const provs = ms.providers || [];
+  const ks = $("ks_provider");
+  if (ks) {
+    const cur = ks.value;
+    ks.innerHTML = provs.map(p => '<option value="' + esc(p.name) + '">' + esc(p.name) + '</option>').join("");
+    if (cur && provs.some(p => p.name === cur)) ks.value = cur;
+  }
   if (!provs.length){
     set($("provList"), '<div class="empty">No providers yet.</div>');
     const pm = $("provListMain"); if (pm) set(pm, '<div class="empty">No providers yet — add one below.</div>');
