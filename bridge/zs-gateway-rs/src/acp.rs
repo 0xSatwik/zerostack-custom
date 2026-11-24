@@ -52,6 +52,7 @@ pub struct State {
     pub conn: Option<Arc<Conn>>,
     pub acp_sid: Option<String>,
     pub running: bool,
+    pub stop_requested: bool,
     pub closed: bool,
     pub deleted: bool,
     pub worker_started: bool,
@@ -148,6 +149,7 @@ pub fn new_session(cwd: &str, model: &str, name: &str) -> Arc<Session> {
             conn: None,
             acp_sid: None,
             running: false,
+            stop_requested: false,
             closed: false,
             deleted: false,
             worker_started: false,
@@ -272,9 +274,13 @@ fn rpc(conn: &Arc<Conn>, method: &str, params: Value, timeout: Duration) -> Resu
             }
             Ok(msg)
         }
-        Err(_) => {
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
             conn.pending.lock().unwrap().remove(&rid);
             Err(format!("{} timed out after {}s", method, timeout.as_secs()))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            conn.pending.lock().unwrap().remove(&rid);
+            Err(format!("{}: ACP connection closed (process ended)", method))
         }
     }
 }
@@ -407,9 +413,17 @@ fn reader_thread(s: Arc<Session>, conn: Arc<Conn>, stream: TcpStream) {
             handle_update(&s, &p);
         }
     }
-    // connection ended: wake every waiter, mark the session idle again
+    // connection ended: wake every waiter, mark the session idle again.
+    // Same true->false guard as run_turn/stop_session: only the transition
+    // decrements RUNNING_COUNT, so a stop (or a dead proc) can't leak it.
     conn.pending.lock().unwrap().clear();
-    s.lock().running = false;
+    {
+        let mut st = s.lock();
+        if st.running {
+            st.running = false;
+            RUNNING_COUNT.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
 }
 
 // ---- spawn / kill ---------------------------------------------------------
@@ -790,6 +804,7 @@ pub fn run_turn(s: &Arc<Session>, text: &str) {
     {
         let mut st = s.lock();
         st.running = true;
+        st.stop_requested = false;
         RUNNING_COUNT.fetch_add(1, Ordering::SeqCst);
         st.turn = None;
         st.last_assistant.clear();
@@ -883,6 +898,13 @@ pub fn run_turn(s: &Arc<Session>, text: &str) {
                     };
                     last_err = e.clone();
                     log(&format!("session {}: model {} failed: {}", s.id, cand, e));
+                    // A Stop must end the turn, not fall back to the next
+                    // model: break out of the attempt loop; the outer loop
+                    // below also breaks on stop_requested.
+                    if s.lock().stop_requested {
+                        note_delta(s, "\n[stopped]\n");
+                        break;
+                    }
 
                     // 503 / 429 / 502 from the provider: the request itself is
                     // fine, the upstream is busy. Wait what it asked for and
@@ -902,6 +924,9 @@ pub fn run_turn(s: &Arc<Session>, text: &str) {
                             cand, one_line(&e, 160), transient, TRANSIENT_RETRIES, wait
                         ));
                         std::thread::sleep(Duration::from_secs(wait));
+                        if s.lock().stop_requested {
+                            break;
+                        }
                         continue;
                     }
 
@@ -947,7 +972,7 @@ pub fn run_turn(s: &Arc<Session>, text: &str) {
                 }
             }
         }
-        if ok {
+        if ok || s.lock().stop_requested {
             break;
         }
     }
@@ -1081,6 +1106,7 @@ pub fn load_sessions() {
                 conn: None,
                 acp_sid: None,
                 running: false,
+                stop_requested: false,
                 closed: false,
                 deleted: false,
                 worker_started: false,
@@ -1165,6 +1191,9 @@ pub fn delete_session(sid: &str) -> bool {
 
 pub fn stop_session(s: &Arc<Session>) -> bool {
     let was = s.lock().running;
+    // Tell the running turn to stop falling back to other models.
+    // Set before kill_proc so run_turn sees it as soon as its rpc fails.
+    s.lock().stop_requested = true;
     kill_proc(s);
     {
         let mut st = s.lock();
