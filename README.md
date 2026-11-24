@@ -26,7 +26,7 @@ other services — for that, see the companion vault below.
 | **Zerostack 1.8.6** | The agent. Rust, sessions, memory, subagents, hooks. Runs on the Altare sandbox. |
 | **Rust gateway** | Serves `/` (home), `/pi` (chat), `/admin` (keys/models), `/pi/settings`. Port 8766. Single binary, std HTTP + serde_json. |
 | **Home page** | True-black landing page at `/` with links to Chat, Admin, Browser, Settings + live gateway status. |
-| **Browser** | Camoufox + Playwright MCP on an Instabox machine, with a noVNC viewer and a password-protected control page at `/browser`. |
+| **Browser** | camofox-browser (Node, port 9377) on an Instabox machine, with a noVNC viewer and a password-gated control page at `/browser`. The old Playwright MCP on 8931 is dead. |
 | **Vault** | [cf-d1-vault](https://github.com/0xSatwik/cf-d1-vault) — Cloudflare Worker + D1 secrets vault. Agents hold only a request-only token; keys are never seen by the agent. |
 | **Search** | Free search/fetch: TinyFish via Monid + cf-search Worker (Bing) + X via FxEmbed. No paid endpoints. |
 | **Recall** | Session memory: index + digests + one lesson per mistake. Instant recall without loading transcripts. |
@@ -38,7 +38,7 @@ other services — for that, see the companion vault below.
 - **Browser host:** Instabox `muse-browser` (4 vCPU / 8 GiB / 20 GiB, Debian 13), reached over the Tailscale tailnet
 - **Models:** 6 providers — 100milionseek, howtofix, moss, tokenlab, xingchi (plus any OpenAI-compatible API you add)
 
-## Install — one command, then a short checklist
+## Install — one file, one command, then a short checklist
 
 On a fresh Altare sandbox (Ubuntu 24.04) as root:
 
@@ -47,16 +47,34 @@ curl -fsSL https://raw.githubusercontent.com/0xSatwik/zerostack-custom/main/inst
 bash install.sh
 ```
 
-`install.sh` automates the mechanical part (system packages, Node 24,
-Rust, cloudflared, Zerostack built from source, the Rust gateway built
-from source, the chat/admin/settings pages, the config with
-placeholders, the recall system, and the tmux supervisor sessions).
-It prints a manual checklist at the end for the parts that need YOUR
-accounts — provider API keys, the vault Worker + D1, the Cloudflare
-Tunnel + domain, the opening password, and the Instabox browser.
-Those can never come from GitHub.
+**`install.sh` is the single-file install.** It does everything
+mechanical, so nobody has to edit files by hand: system packages,
+Node 24, Rust 1.100.0, mold (the Zerostack linker), cloudflared,
+Zerostack 1.8.6 built from source **with `--features
+advisor,hooks,loop,acp`** (default features drop `--acp` and the
+binary exits immediately) **plus the subagent ACP-init patch**,
+the Rust gateway built from source, **all seven Rust tools**
+(`zs`, `search`, `tailnet-relay`, `watcher`, `recall`,
+`auto-digest`, `zs-gateway`), the chat/admin/settings pages, the
+Zerostack config from the repo template (placeholders only),
+`features.json` + `search.json` defaults, the skills/prompts, the
+recall system, and the tmux supervisor sessions. It is idempotent —
+safe to re-run; it never overwrites your keys, config secrets,
+gateway token, or sessions.
 
-Full step-by-step guide for another Muse: [`INSTALL.md`](INSTALL.md).
+It prints a manual checklist at the end for the parts that need YOUR
+accounts — provider API keys, Tailscale auth, the vault Worker + D1,
+the Cloudflare Tunnel + domain, the opening password, the search
+worker URLs, and the Instabox browser. Those can never come from
+GitHub.
+
+**For another Muse setting this up for a new user:** hand it this
+repo and this README. The order is: (1) run `install.sh` on a fresh
+Altare sandbox as root; (2) work through the checklist it prints —
+keys in `/admin`, Tailscale up (userspace networking + SOCKS5),
+vault deploy, named tunnel (proxied hostname), opening password,
+search worker URLs; (3) verify with the checks in "Verify the whole
+setup" below. Full step-by-step guide: [`INSTALL.md`](INSTALL.md).
 It lists every step, what it does, and what to check after each one.
 
 ## After setup: keys and models live in the Admin page
@@ -176,11 +194,18 @@ Both agents use the same free system — never the paid endpoints, never
 a key written literally in a file. See `search/SEARCH.md` and the skill
 in `skills/web-research/`:
 
-- **Tool:** `search/web.py` — TinyFish free search+fetch via a Monid
-  key (`$0`; search 12k/day, fetch 1k/day) + cf-search Worker (Bing, no
-  key, free) + X/social via FxEmbed (descriptive User-Agent mandatory).
-- **Default:** `python3 search/web.py research "query"` — web results
-  from two engines (deduped) + an X ask pack + fetch of the top 5 URLs.
+- **Tool (Zerostack, on the box):** `/root/pi-bridge/search` — the Rust
+  search/fetch binary (same CLI as `web.py`). This is what the
+  web-research skill calls now. If the binary is ever missing, fall back
+  to `python3 /root/pi-bridge/search.py` (same file, Python reference).
+- **Tool (Muse, on the VM):** `python3 ~/workspace/search/web.py` — the
+  same system; the Rust binary is box-only (no Cargo on the VM).
+- **Engines:** TinyFish free search+fetch via a Monid key (`$0`; search
+  12k/day, fetch 1k/day) + cf-search Worker (Bing, no key, free) +
+  X/social via FxEmbed (descriptive User-Agent mandatory).
+- **Default:** `search research "query"` (or `python3 search/web.py
+  research "query"` on the VM) — web results from two engines (deduped)
+  + an X ask pack + fetch of the top 5 URLs.
 - **Monid key:** only in `~/.config/monid/credentials.yaml` (chmod 600,
   format `key: "<value>"`) — on the Muse VM and on the box.
 - **DuckDuckGo was removed (2026-11-19).** It returns nothing from
@@ -210,13 +235,28 @@ in `skills/web-research/`:
 
 ## Known limits (honest, not hidden)
 
-- **The gateway is single-threaded.** One long/stuck Zerostack task
-  can still block page API calls. `/health` is lock-free since
-  2026-11-24 (an atomic running-count, guarded so a stop mid-turn
-  can't leak it) — it answers even during a turn. Killing a stuck ACP
-  process does NOT unblock a stuck turn — the broken session files
-  must be deleted AND the gateway restarted. A real non-blocking fix
-  is still open.
+- **Stop works now (2026-11-24).** Pressing Stop (or `POST
+  /sessions/<id>/stop`) ends the turn: it sets a `stop_requested`
+  flag so the turn does NOT fall back to the next model, kills the
+  ACP process, and returns `{"stopped": true}`. Live-verified: a
+  long turn stopped mid-flight, no fallback spawn, count back to 0.
+- **`/health` is lock-free (2026-11-24).** It reads an atomic
+  running-count, so it answers even during a turn. The count is
+  guarded on every path that flips `running` (run_turn end,
+  stop_session, and the ACP reader thread when a connection ends —
+  the reader was the leak: it cleared `running` without decrementing,
+  fixed 2026-11-24). A stopped turn leaves the count at 0.
+  `rpc` now reports a dead connection as "ACP connection closed
+  (process ended)" instead of a fake "timed out after 3600s".
+- **The deeper gateway freeze is still open (2026-11-24).** When an
+  ACP process dies mid-turn on its own (not via Stop), the turn can
+  wedge in fallback and the session endpoints (`/sessions`,
+  `/sessions/<id>`) can stop responding — while `/health` still
+  answers. Root cause is unpinned: the box runs under `proot`,
+  which already traces the gateway, so `gdb` cannot attach for
+  stack traces. Recovery is still: kill the gateway PID (the
+  supervisor respawns it in ~2s) and retry. A full non-blocking
+  refactor of the ACP wait path is the remaining work.
 - **Zerostack subagents in ACP mode — FIXED 2026-11-24.** They used
   to panic (`SubagentConfig not initialized`) because ACP never called
   the init the TUI path runs. A 33-line patch in
@@ -264,7 +304,10 @@ guide: `recall/SKILL.md`.
 curl -fsS https://hardeepwalia.pitunnel.dpdns.org/health   # {"ok": true, "impl": "rust"}
 # /pi, /admin, /browser, /pi/settings all return 200
 # prompt "Say OK" in /pi — should answer OK
-python3 search/web.py research "zerostack agent"          # web results + fetches
+/root/pi-bridge/search research "zerostack agent"          # web results + fetches (Rust)
+/root/pi-bridge/search search "Rust programming language"  # same CLI as web.py
+# Stop check: start a long turn in /pi, press Stop — the turn ends,
+# no fallback model spawns, /health sessions_running returns to 0.
 ```
 
 ## Lessons baked in
@@ -322,16 +365,15 @@ bridge/
   search-rs/         Rust search/fetch (TinyFish + Bing + X; binary: search)
   recall-rs/         Rust recall CLI (find/digest/lesson/lessons/sessions)
   auto-digest-rs/    Rust recall auto-updater (tmux recall-auto, every 6h)
-recall/
-  index.jsonl        one line per session
-  digests/           ~200-400 token summaries per session
-  lessons/           one file per learned mistake
-  recall.py          Python recall CLI (reference; live one is Rust)
-  auto_digest.py     Python auto-updater (reference; live one is Rust)
 search/
-  web.py             free search/fetch (TinyFish + Bing + X) — still the
-                     documented tool; the Rust binary is live alongside it
+  web.py             free search/fetch (TinyFish + Bing + X) — the Python
+                     reference; the Rust binary (`/root/pi-bridge/search`)
+                     is the live tool on the box, same CLI
   SEARCH.md          search system notes
+# Recall lives on the box at /root/work/recall/ (index.jsonl + digests/
+# + lessons + .deleted.json guard), not in this repo. The repo carries
+# the tools: bridge/recall-rs/ (CLI) and bridge/auto-digest-rs/
+# (auto-updater, tmux recall-auto, every 6h).
 zerostack/
   subagent-acp-init.patch  the ACP subagent-init fix (33 lines, live-verified)
   BUILD-NOTES.md     how to build Zerostack (feature set, mold, the patch)
