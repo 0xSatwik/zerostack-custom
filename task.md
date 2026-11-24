@@ -124,8 +124,10 @@ config, and live box state. Our binary is stock upstream 1.8.6 + 9 edited prompt
 - Do not port AVA code, do not add it as a dependency, do not replace any component with it. Token-budget enforcement would need gateway observability of Zerostack's per-session token use first (ACP doesn't report it reliably) — a prerequisite project, not an AVA adoption.
 
 ## CARRIED OVER — pre-existing open flaws (not from the 10 features)
-- Gateway is single-threaded: one stuck task blocks `/health` and all pages. Real non-blocking fix still open.
-- `recall-auto` restart blocked until the updater distinguishes user-deleted sessions from lost ones (else it deletes surviving digests).
-- Browser control Stop/Start buttons call `stop-browser.sh` / `browser-stack.sh`, which don't exist on the box.
-- Camoufox window still opens tiny/off-screen; durable auto-resize fix open.
-- Direct noVNC path `/browser-vnc/vnc.html` is not password-gated.
+- Gateway non-blocking — PARTIALLY FIXED 2026-11-24: Stop now ends a turn (stop_requested flag, no fallback, returns JSON — live-verified); /health is lock-free (atomic count); RUNNING_COUNT leak fixed (the ACP reader thread was clearing `running` without decrementing — now uses the true->false guard); rpc reports a dead connection accurately. STILL OPEN: when an ACP proc dies mid-turn on its own, the turn can wedge in fallback and session endpoints stop responding; proot blocks gdb so the root cause is unpinned. Recovery is gateway restart.
+- ~~`recall-auto` restart blocked until the updater distinguishes user-deleted sessions from lost ones~~ DONE 2026-11-24 (guard: digest deleted only on a `.deleted.json` marker; Rust auto-digest, tmux recall-auto running).
+- ~~Browser control Stop/Start buttons call `stop-browser.sh` / `browser-stack.sh`, which don't exist~~ DONE 2026-11-24 (scripts created, Rust browser-control live).
+- ~~Camoufox window still opens tiny/off-screen~~ DONE 2026-11-24 (auto-resize to 822x600 ~1.5s after launch, live-verified).
+- ~~Direct noVNC path `/browser-vnc/vnc.html` is not password-gated~~ DONE 2026-11-24 (Rust control proxies /browser-vnc with auth; tunnel repointed to 6081).
+- Search call-site switch — DONE 2026-11-24: web-research skill + Zerostack prompt now call the Rust `/root/pi-bridge/search` binary (same CLI); Python search.py is the fallback. Pushed.
+- install.sh is now a true single-file install (2026-11-24): zerostack-custom repo, mold, Zerostack --features advisor,hooks,loop,acp + subagent patch, all 7 Rust tools, config template, features.json/search.json. README updated to match.
