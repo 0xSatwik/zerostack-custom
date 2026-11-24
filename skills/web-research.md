@@ -1,10 +1,6 @@
-<!-- Installed for Zerostack on the Altare box. -->
-<!-- Zerostack has no skills directory: this file IS the skill, as a named prompt. -->
-<!-- Load it with `/prompt web-research`, `.web-research <msg>`, or `zerostack --load-prompt web-research`. -->
-
 ---
 name: web-research
-description: Best search and fetch system for Muse and Zerostack — TinyFish free via Monid + cf-search Worker (Bing) combined for maximum URLs, TinyFish free fetch, and X/Bluesky/TikTok/Instagram/Threads/Mastodon via the fixtweet worker. Use for ANY web research, X search, or fetching pages. Always use the combined `research` command, never a single source.
+description: Best search and fetch system for Muse and Zerostack — backend selector in /admin (Monid / Bing / Apify), TinyFish free via Monid + cf-search Worker (Bing), your own Apify actors (34-source web search, Reddit), TinyFish fetch with Camoufox browser fallback, and X/Bluesky/TikTok/Instagram/Threads/Mastodon via the fixtweet worker. Use for ANY web research, X search, Reddit search, or fetching pages. Always use the combined `research` command, never a single source.
 ---
 
 # Web Research — the only search/fetch system to use
@@ -15,21 +11,28 @@ single search engine, never curl a search page by hand, never guess.
 ## The tool
 
 Muse: `python3 ~/workspace/search/web.py`
-Zerostack (on Altare sandbox): `python3 /root/pi-bridge/search.py` (same file)
+Zerostack (on Altare sandbox): `/root/pi-bridge/search` (Rust binary, same CLI as web.py). If the binary is ever missing, fall back to `python3 /root/pi-bridge/search.py` (same file, Python reference).
 
 ## Worker URLs — set by the user in /admin, never hardcoded
 
 Both search workers are the user's own deployments. The user sets their
 URLs in the **/admin page → Keys & secrets → Web search — worker URLs**.
-They are stored in `search.json` next to `web.py` (chmod 600) — no URL
+They are stored in `search.json` next to the search tool (chmod 600) — no URL
 is ever written literally in code, in a skill, or in the repo.
 
 - **fixtweet worker URL** (X / social) + optional second URL (failover,
   e.g. the `-2` clone). If empty, the X leg is skipped.
 - **cf-search worker URL** (Bing). If empty, the Bing leg is skipped.
 - **Leg toggles**: TinyFish, Bing, X — on/off each.
+- **Search backend**: set in /admin → Web search settings — `Monid`, `Bing combination`, or `Apify`. One backend at a time; default Monid. Stored in `search.json` as `backend`.
 - **Monid key** (TinyFish): same /admin page, write-only, stored in
   Monid's own credential store (`~/.config/monid/credentials.yaml`).
+- **Apify API keys** (only used when the backend is Apify): multiple
+  keys, same card pattern as Monid/Instabox. Under each key, add
+  multiple actors by **name + actor ID** (no IDs are ever pre-filled
+  or hardcoded anywhere). In /admin you pick a key, then pick the
+  actor by name. The token lives in the vault and reaches `web.py`
+  at runtime; the agent never sees it.
 
 `web.py` reads `search.json` on every run (env vars `FXEMBED_WORKER_URL`,
 `FXEMBED_WORKER_URL_2`, `CF_SEARCH_URL` override it). If a URL is not
@@ -41,15 +44,21 @@ worker's `/llm.txt` (fetch either URL + `/llms.txt` or `/llm.txt`).
 ## Combined research — default for every research question
 
 ```
-python3 web.py research "your question" --pages 2 --fetch-top 5
+/root/pi-bridge/search research "your question" --pages 2 --fetch-top 5
 ```
 
 What it does, in one call (code-mode style — 1 tool call, not 6-8):
-1. **Web search, two engines, deduped** — TinyFish `/free/search`
-   via Monid ($0) + cf-search Worker (Bing, no key). Maximum URLs.
-2. **X search** — fixtweet worker `/ai/2/ask?q=&pages=2`, merged Markdown pack.
-3. **Fetch top 5 URLs** — TinyFish `/free/fetch` ($0, clean Markdown),
-   fallback plain curl.
+1. **Web search, per the selected backend** — Monid: TinyFish `/free/search`
+   via Monid ($0) + cf-search Worker (Bing, no key), deduped. Bing
+   combination: the same two engines. Apify: your Web Search API actor
+   (34 sources, SearXNG meta-search) via run-sync.
+2. **Reddit search** (when enabled) — your Reddit Scraper actor via
+   run-sync. Reddit is its own leg; the X worker does not cover it.
+3. **X search** — fixtweet worker `/ai/2/ask?q=&pages=2`, merged Markdown pack.
+4. **Fetch top 5 URLs** — TinyFish `/free/fetch` ($0, clean Markdown).
+   If Monid fetch is blocked or fails, fetch via the Camoufox browser
+   on Instabox (navigate + read rendered text). Never a plain curl
+   scrape as first choice.
 
 Use `research` for anything that needs real data. Use the single
 commands below only when you need just one piece.
@@ -57,9 +66,9 @@ commands below only when you need just one piece.
 ## Web search — two engines, combined
 
 ```
-python3 web.py search "query" [--purpose "what the results are for"]
-python3 web.py search-cf "query" [--vertical web|images|videos|news] [--count 10] [--cc IN] [--setlang en-IN] [--time week]
-python3 web.py fetch https://example.com [https://...]   # up to 10 URLs
+/root/pi-bridge/search search "query" [--purpose "what the results are for"]
+/root/pi-bridge/search search-cf "query" [--vertical web|images|videos|news] [--count 10] [--cc IN] [--setlang en-IN] [--time week]
+/root/pi-bridge/search fetch https://example.com [https://...]   # up to 10 URLs
 ```
 
 ### TinyFish (primary, via Monid)
@@ -143,6 +152,134 @@ News only (vertical=news, Bing News):
 - Google News and DuckDuckGo do NOT work from Cloudflare's network
   (503 / 202 bot-challenge). Bing is the only working source there.
 
+## Apify — your own actors (backend: Apify)
+
+Only active when the search backend is Apify (see above). Keys and
+actor IDs are set by the user in /admin — never hardcoded here, in
+`web.py`, or in the repo. The token comes from the vault at runtime;
+the agent never sees it.
+
+### Running an actor (the only calls `web.py` uses)
+
+- Run synchronously, get dataset items back directly:
+  `POST https://api.apify.com/v2/actors/<username>~<slug>/run-sync-get-dataset-items?token=<TOKEN>`
+  Body = input JSON, `Content-Type: application/json`. Use this — it
+  waits and returns the items, no polling.
+- Async (only if a run is long): `POST
+  https://api.apify.com/v2/actors/<username>~<slug>/runs?token=<TOKEN>`,
+  then `GET https://api.apify.com/v2/datasets/{datasetId}/items`.
+- In API paths the actor is `<username>~<slug>` (tilde). In the Store
+  it is `<username>/<slug>` (slash).
+- Actor IDs are public: `GET https://api.apify.com/v2/acts/<username>~<slug>`
+  (no token) returns the actor object with its `id`.
+
+### Web Search API actor — 34 sources
+
+SearXNG meta-search over Google, Bing, Brave, DuckDuckGo, Yandex,
+Yahoo, Baidu, Sogou, Mojeek, Qwant, Startpage + Wikipedia, GitHub,
+arXiv, Stack Overflow, OpenStreetMap, Reddit, YouTube, Wolfram Alpha.
+No browser/proxy by default. Dedupes by normalized URL across the
+whole run; scores title +2, content +1, URL/host +0.5, plus a
+freshness bonus. Up to 1,000 queries per run, 1–100 results per query,
+up to 10,000 results per run.
+
+Input (all optional; `queries` is the effective main input):
+- `queries`: array of strings, 1–1,000 questions. Batch many in one run.
+- `mode`: `search` (default) | `images` | `videos` | `news` | `maps` |
+  `science` | `files` | `read_page` (fetch full text of `urls`).
+- `engines`: array, empty = all sources. E.g.
+  `["wikipedia","github","arxiv","bing","duckduckgo"]`.
+- `category`: `general` (default) | `files` | `images` | `it` | `map` |
+  `music` | `news` | `science` | `social media` | `videos`.
+- `language`: default `en`. `region`: default `us`. `safeSearch`: 0 off,
+  1 moderate (default), 2 strict. `timeRange`: `day` | `week` | `month` |
+  `year` (empty = none).
+- `maxResults`: default 5 (1–100 per query). `maxConcurrency`: default 8.
+  `maxChars`: default 4000 (max text per result). `chunkSize`: 0 = no chunking.
+- `groupByQuery`: false = one dataset item per result; true = one item
+  per query with a `results` array.
+- `includeRawContent`: false — fetch full text of every result page
+  (billed per page read). `pageFormat`: `text` | `markdown` | `html`.
+- `urls`: array of URLs, used with `mode: read_page`.
+  `agentContext`: false — adds clean LLM-ready text per result (billed
+  separately). `strictEngines`: false (a failing engine does not fail
+  the run). `debug`: false. `proxyConfiguration`:
+  `{"useApifyProxy": false}` by default.
+
+Example: `{"queries":["What is the capital of France?"],"maxResults":5}`.
+With full text: add `"includeRawContent":true`. Read a page:
+`{"mode":"read_page","urls":["https://en.wikipedia.org/wiki/Paris"],"maxChars":4000}`.
+
+Output row (default): `query`, `engine`, `position`, `title`, `url`,
+`content` (snippet, capped 400 chars), `score`, `publishedDate`. With
+raw content: + `rawContent`, `rawContentLength`, `fetchedAt`,
+`htmlLength`, `extractionMode`. With groupByQuery: `query`, `count`,
+`results[]`.
+
+Pricing (pay per event; the owner pays only platform compute for their
+own runs from the $5/month free credits — the per-event prices are what
+other users pay): search results $1.50/1,000; read pages $1.00/1,000;
+tokens $0.15/1,000; agentContext $0.50/1,000; images/videos $1.00/1,000.
+Caps: 5,000 results/day, 10,000/run.
+
+### Reddit Scraper actor
+
+Scrapes Reddit's public JSON endpoints — no login, cookies, proxy or
+browser. One subreddit per run, one username per run for user modes.
+Only public subreddits/posts. NSFW excluded by default. Pagination is
+automatic up to `resultsLimit`.
+
+Input (all optional):
+- `mode`: `subredditPosts` (default) | `postDetails` | `duplicates` |
+  `userPosts` | `userComments` | `userOverview` | `subredditDetails` |
+  `subredditAutocomplete` | `directory`.
+- `subredditName`: e.g. `technology` (no `r/`). `postUrl`: full post URL
+  (postDetails). `userName`: no `u/` (user modes). `query`: text for
+  subredditAutocomplete.
+- `directory`: `popular` (default) | `all` | `top` | `new` | `rising` |
+  `random` (mode `directory`).
+- `feedSource`: `front` (default) | `hot` | `new` | `top` | `rising` |
+  `controversial`. `sort`: `hot` (default) | `new` | `top` | `rising` |
+  `controversial`. `time`: `all` (default) | `hour` | `day` | `week` |
+  `month` | `year` (for top/controversial).
+- `resultsLimit`: default 100 (1–1,000). `includeNsfw`: false.
+  `includeComments`: false. `includeRules`: false (subredditDetails).
+  `agentContext`: false.
+
+Output post row: `subreddit`, `author`, `id`, `title`, `selftext`,
+`url`, `permalink`, `domain`, `score`, `upvoteRatio`, `numComments`,
+`createdUtc`, `created`, `isVideo`, `isSelf`, `over18`, `spoiler`,
+`stickied`, `locked`, `flairText`, `thumbnail`, `media`, `preview`,
+`awards`, `body`, `selftextHtml`, `source`, `agentContext` (when
+enabled). User rows: `username`, `name`, `id`, `description`,
+`createdUtc`, `karma`, `commentKarma`, `linkKarma`, `isEmployee`,
+`isGold`, `isMod`, `verified`, `iconImg`, `bannerImg`, `subreddit`
+(profile subreddit object). Subreddit rows: `id`, `name`,
+`displayName`, `title`, `description`, `subscribers`,
+`activeUserCount`, `createdUtc`, `over18`, `lang`, `rules` (when
+includeRules).
+
+Pricing: results $0.90/1,000. Caps: 5,000 results/day, 10,000/run,
+1,000 per run.
+
+### Commands
+
+```
+/root/pi-bridge/search research "question"            # uses the selected backend + Reddit leg if enabled
+/root/pi-bridge/search reddit "technology" [--sort hot|new|top] [--time week] [--limit 20]   # Reddit Scraper actor
+/root/pi-bridge/search reddit-post <post-url> [--comments]   # single post details
+```
+
+## Fetch — always Monid, Camoufox fallback
+
+Fetch always uses TinyFish `/free/fetch` ($0, clean Markdown). If
+Monid fetch is blocked or fails, fall back to the Camoufox browser on
+Instabox (port 9377): navigate to the URL and read the rendered text
+(use the `browser` Rust CLI or the camofox-browser API). The browser
+renders JavaScript, so it also covers pages plain fetchers miss. Never
+use a plain curl scrape as the first choice, and never use a paid
+fetch endpoint.
+
 ### DuckDuckGo — REMOVED (2026-11-19)
 
 DuckDuckGo was the third leg and is now REMOVED from web.py, the skill,
@@ -165,10 +302,10 @@ Mastodon/ActivityPub instance. NOT supported: Reddit, Facebook,
 YouTube, TikTok comments/likers/search.
 
 ```
-python3 web.py xsearch "Zerostack agent" [--pages 3]   # /ai/2/ask, merged pack
-python3 web.py xpost https://x.com/jack/status/20  # any post URL, or just the id
-python3 web.py xprofile <handle>                        # X profile
-python3 web.py xtrends                                   # X trends
+/root/pi-bridge/search xsearch "Zerostack agent" [--pages 3]   # /ai/2/ask, merged pack
+/root/pi-bridge/search xpost https://x.com/jack/status/20  # any post URL, or just the id
+/root/pi-bridge/search xprofile <handle>                        # X profile
+/root/pi-bridge/search xtrends                                   # X trends
 ```
 
 ### The 3 core recipes
@@ -254,3 +391,13 @@ python3 web.py xtrends                                   # X trends
    new results. Vary the query, country, language, or time filter instead.
 7. **DuckDuckGo is removed** — do not add it back. It does not work
    from the sandbox or Cloudflare.
+8. **Backend selector**: use the backend set in /admin (`search.json`
+   `backend`). Monid = TinyFish + Bing; Apify = your Apify actors.
+   Never mix backends in one call unless the setting says so.
+9. **Apify**: actor IDs and keys are never hardcoded — they come from
+   /admin (key → actor name). Use run-sync for results. The agent
+   never sees the token.
+10. **Fetch is Monid, fallback Camoufox** — if Monid fetch is blocked,
+    use the Camoufox browser, not a curl scrape.
+11. **Reddit is its own leg** — use the Reddit Scraper actor for
+    Reddit; the X worker does not cover Reddit.
