@@ -2,7 +2,7 @@
 # Replace every $VAR / YOUR-* placeholder with your own values.
 # Keys are NEVER in this file — they come from environment variables only.
 #   HMS_API_KEY, XINGCHI_API_KEY, TOKENLAB_API_KEY, MOSS_API_KEY,
-#   HOWTOFIX_API_KEY, INKLING_API_KEY, KERN_API_KEY: your model provider
+#   HOWTOFIX_API_KEY, INKLING_API_KEY: your model provider
 #   keys, as env vars on the box.
 #   VAULT_AGENT_TOKEN: a request-only token for your vault MCP server.
 #   YOUR-VAULT-WORKER: your own vault Worker hostname (see below).
@@ -19,120 +19,10 @@ context_window = 197488
 # in TOML, anything after a [table] header belongs to that table.
 enable-exa-mcp = false
 
-# --- Custom providers: 7 providers, OpenAI-compatible ---
+# --- Custom providers: 6 providers, OpenAI-compatible ---
 [custom_providers.100milionseek]
 provider_type = "openai"
 base_url = "https://100milionseek.top/v1"
 api_key_env = "HMS_API_KEY"
 model = "deepseek-v4.1-flash-free"
 
-# Kern LLM — the LIVE host for thinkingmachines/inkling-2-mini (free,
-# single GPU box behind Cloudflare). Same model as the inkling provider
-# below, different host. Online only 10:30-19:30 IST; 2 concurrent /
-# 18 RPM; returns 502 when the box is down (gateway retries, then
-# falls back). Reasoning model: max_tokens is 65536 globally (top of
-# this file), well above the 2000 the thinking needs — a low cap
-# returns empty content. Cloudflare blocks Python urllib's default
-# User-Agent (403/1010); Zerostack's reqwest UA passes (verified live).
-[custom_providers.kern]
-provider_type = "openai"
-base_url = "https://api.kern-llm.org/v1"
-api_key_env = "KERN_API_KEY"
-model = "thinkingmachines/inkling-2-mini"
-
-[custom_providers.inkling]
-provider_type = "openai"
-base_url = "https://ekzhang--inkling2-mini.us-east.modal.run/v1"
-api_key_env = "INKLING_API_KEY"
-model = "thinkingmachines/Inkling-2-Mini"
-
-[custom_providers.xingchi]
-provider_type = "openai"
-base_url = "https://api.xingchiapi.com/v1"
-api_key_env = "XINGCHI_API_KEY"
-api_style = "responses"
-# xingchi rejects /v1/chat/completions (400 chat_completions_disabled);
-# api_style "responses" is the fix. Models: gpt-6.1-sol, gpt-6-astra.
-# NOTE: xingchi also returns 403 client_not_allowed for clients it does not
-# recognise by name — zerostack is not admitted as of 2026-11-20.
-
-[custom_providers.tokenlab]
-provider_type = "openai"
-base_url = "https://api.tokenlab.amd.com/v1"
-api_key_env = "TOKENLAB_API_KEY"
-model = "DeepSeek-V4.1-Flash"
-
-[custom_providers.moss]
-provider_type = "openai"
-base_url = "https://api.mosi.cn/v1"
-api_key_env = "MOSS_API_KEY"
-model = "nex-n2.6"
-
-[custom_providers.howtofix]
-provider_type = "openai"
-base_url = "https://api.howtofix.id/v1"
-api_key_env = "HOWTOFIX_API_KEY"
-model = "deepSeek-v4.1-flash-1017-sg"
-
-# --- Fast model switching (/models <name> or --quick-model=<name>) ---
-[quick_models.fast]
-provider = "100milionseek"
-model = "deepseek-v4.1-flash-free"
-
-[quick_models.sol]
-provider = "xingchi"
-model = "gpt-6.1-sol"
-
-[quick_models.astra]
-provider = "xingchi"
-model = "gpt-6-astra"
-
-[quick_models.tokenlab]
-provider = "tokenlab"
-model = "DeepSeek-V4.1-Flash"
-
-[quick_models.moss]
-provider = "moss"
-model = "nex-n2.6"
-
-[quick_models.howtofix]
-provider = "howtofix"
-model = "deepSeek-v4.1-flash-1017-sg"
-
-[quick_models.kern]
-provider = "kern"
-model = "thinkingmachines/inkling-2-mini"
-
-[quick_models.thinkingmachines-inkling-2-mini]
-provider = "inkling"
-model = "thinkingmachines/Inkling-2-Mini"
-
-# --- Vault MCP (same locked model as Pi: Muse unlocks, agent never sees keys) ---
-# NOTE: zerostack does NOT expand ${ENV} in MCP headers (expand_env is
-# provider-only, verified in src/provider.rs). The LIVE config on the box gets
-# the literal token substituted at deploy time from $VAULT_AGENT_TOKEN.
-# NEVER put the literal token in this file or the repo; keep the placeholder.
-[mcp_servers.vault]
-url = "https://YOUR-VAULT-WORKER.workers.dev/mcp"
-headers = { Authorization = "Bearer ${VAULT_AGENT_TOKEN}" }
-connect_timeout_secs = 30
-tool_timeout_secs = 30
-connect_retries = 2
-
-# --- Batch 3 (task.md items 3, 5, 6) ---
-[chain]
-brainstorm-to-plan = true
-plan-to-code = true
-code-to-review = false
-
-[advisor]
-enabled = true
-model = "deepseek-v4.1-flash-free"
-max_uses = 3
-human_handoff = true
-
-[prompt_to_model]
-plan = "100milionseek/deepseek-v4.1-flash-free"
-brainstorm = "100milionseek/deepseek-v4.1-flash-free"
-code = "100milionseek/deepseek-v4.1-flash-free"
-review = "100milionseek/deepseek-v4.1-flash-free"
