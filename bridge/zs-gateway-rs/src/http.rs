@@ -40,14 +40,8 @@ impl Response {
     pub fn json(status: u16, v: &serde_json::Value) -> Response {
         Response { status, ctype: "application/json", body: serde_json::to_vec(v).unwrap_or_default() }
     }
-    pub fn err(status: u16, msg: &str) -> Response {
-        Response::json(status, &serde_json::json!({ "error": msg }))
-    }
     pub fn html(body: Vec<u8>) -> Response {
         Response { status: 200, ctype: "text/html; charset=utf-8", body }
-    }
-    pub fn text(status: u16, body: String) -> Response {
-        Response { status, ctype: "text/plain; charset=utf-8", body: body.into_bytes() }
     }
 }
 
