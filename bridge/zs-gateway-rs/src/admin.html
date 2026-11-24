@@ -427,15 +427,15 @@ table.grid tr.def td{background:#0c0f14}
             <p class="hint" style="margin-top:0">Zerostack runtime features, read from <span class="mono">features.json</span>.
               A feature is off unless you switch it on here; the gateway passes the matching flags when it starts a session.</p>
             <div class="field tight" style="align-items:center">
-              <label class="chk"><input type="checkbox" id="ft_chaining"> Prompt chaining</label>
-              <label class="chk"><input type="checkbox" id="ft_advisor"> Advisor</label>
-              <label class="chk"><input type="checkbox" id="ft_hooks"> Hooks</label>
+              <label class="chk"><input type="checkbox" id="ft_chaining" onchange="renderFeatureVis()"> Prompt chaining</label>
+              <label class="chk"><input type="checkbox" id="ft_advisor" onchange="renderFeatureVis()"> Advisor</label>
+              <label class="chk"><input type="checkbox" id="ft_hooks" onchange="renderFeatureVis()"> Hooks</label>
               <div style="flex:0 0 auto"><button onclick="saveFeatures()">Save features</button></div>
             </div>
             <div class="field tight" style="align-items:center">
-              <label class="chk"><input type="checkbox" id="ft_prompt_to_model"> Prompt → model</label>
-              <label class="chk"><input type="checkbox" id="ft_status_signals"> Status signals</label>
-              <label class="chk"><input type="checkbox" id="ft_builtin_memory"> Built-in memory</label>
+              <label class="chk"><input type="checkbox" id="ft_prompt_to_model" onchange="renderFeatureVis()"> Prompt → model</label>
+              <label class="chk"><input type="checkbox" id="ft_status_signals" onchange="renderFeatureVis()"> Status signals</label>
+              <label class="chk"><input type="checkbox" id="ft_builtin_memory" onchange="renderFeatureVis()"> Built-in memory</label>
             </div>
             <p class="hint" id="featHint">Prompt chaining and prompt→model need a <span class="mono">[chain]</span> /
               <span class="mono">prompt_to_model</span> section in config.toml. Hooks need a settings.json; leaving Hooks off
@@ -1299,6 +1299,14 @@ function renderApifyVis(){
   if (sec) sec.hidden = !(bk === "apify" || redditOn);
   const legSel = $("ap_search_leg");
   if (legSel) legSel.hidden = bk !== "apify";
+}
+
+function renderFeatureVis(){
+  const on = (id) => { const el = $(id); return !!(el && el.checked); };
+  const h = $("featHint");
+  if (h) h.hidden = !(on("ft_chaining") || on("ft_prompt_to_model") || on("ft_hooks") || on("ft_advisor") || on("ft_status_signals"));
+  const off = $("featOffHint");
+  if (off) off.hidden = on("ft_builtin_memory");
 }
 async function apifyAdd(){
   const label = ($("ap_label").value || "").trim();
