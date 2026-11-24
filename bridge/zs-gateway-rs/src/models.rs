@@ -167,22 +167,6 @@ impl Registry {
     pub fn provider(&self, name: &str) -> Option<Value> {
         self.providers().get(name).cloned()
     }
-    pub fn models_of(&self, name: &str) -> Vec<Value> {
-        self.provider(name)
-            .and_then(|p| p.get("models").and_then(|m| m.as_array()).cloned())
-            .unwrap_or_default()
-    }
-    pub fn model_meta(&self, p: &str, id: &str) -> (i64, i64) {
-        for m in self.models_of(p) {
-            if m.get("id").and_then(|x| x.as_str()) == Some(id) {
-                return (
-                    m.get("context").and_then(|v| v.as_i64()).unwrap_or(0),
-                    m.get("output").and_then(|v| v.as_i64()).unwrap_or(0),
-                );
-            }
-        }
-        (0, 0)
-    }
 }
 
 pub fn registry() -> Registry {
@@ -500,11 +484,6 @@ pub fn rotation_pick(provider: &str, keys: &[Value]) -> Result<Option<String>, S
     rot[provider] = json!((idx + 1) % usable.len());
     write_json(crate::ROTATION_FILE, &rot);
     Ok(Some(pick))
-}
-
-/// Round-robin over the SET keys of one provider. Counter persisted, tiny file.
-pub fn rotation_next(provider: &str, keys: &[Value]) -> Option<String> {
-    rotation_pick(provider, keys).ok().flatten()
 }
 
 /// Is there another healthy key besides `used` left for this provider?
